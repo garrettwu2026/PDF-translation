@@ -1,0 +1,5 @@
+{
+  "name": "PDF 翻譯神器",
+  "description": "上傳 PDF，自動計算 Token 數量與預估成本，並使用 Gemini 模型翻譯成繁體中文。",
+  "requestFramePermissions": []
+}
