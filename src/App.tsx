@@ -27,32 +27,54 @@ const MODELS = [
 ];
 
 const splitTextIntoChunks = (text: string, maxChunkSize: number = 4000) => {
-  const paragraphs = text.split('\n');
+  // First, split by headings to keep sections together as much as possible
+  const sections = text.split(/(?=\n#+ )/);
   const chunks: string[] = [];
   let currentChunk = '';
 
-  for (const paragraph of paragraphs) {
-    // If a single paragraph is longer than maxChunkSize, we have to split it
-    if (paragraph.length > maxChunkSize) {
+  for (const section of sections) {
+    // If a single section is too long, split it by paragraphs
+    if (section.length > maxChunkSize) {
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
         currentChunk = '';
       }
       
-      let remainingParagraph = paragraph;
-      while (remainingParagraph.length > maxChunkSize) {
-        chunks.push(remainingParagraph.substring(0, maxChunkSize));
-        remainingParagraph = remainingParagraph.substring(maxChunkSize);
+      const paragraphs = section.split(/\n\n+/);
+      for (const paragraph of paragraphs) {
+        if (paragraph.length > maxChunkSize) {
+          // If a single paragraph is still too long, we have to split it by sentences or lines
+          if (currentChunk.length > 0) {
+            chunks.push(currentChunk);
+            currentChunk = '';
+          }
+          
+          let remainingParagraph = paragraph;
+          while (remainingParagraph.length > maxChunkSize) {
+            // Try to find a good split point (period followed by space)
+            let splitPoint = remainingParagraph.lastIndexOf('. ', maxChunkSize);
+            if (splitPoint === -1) splitPoint = maxChunkSize;
+            else splitPoint += 1; // Include the period
+            
+            chunks.push(remainingParagraph.substring(0, splitPoint));
+            remainingParagraph = remainingParagraph.substring(splitPoint);
+          }
+          currentChunk = remainingParagraph;
+        } else {
+          if ((currentChunk.length + paragraph.length + 2) > maxChunkSize && currentChunk.length > 0) {
+            chunks.push(currentChunk);
+            currentChunk = '';
+          }
+          currentChunk += (currentChunk.length > 0 ? '\n\n' : '') + paragraph;
+        }
       }
-      currentChunk = remainingParagraph;
-      continue;
+    } else {
+      if ((currentChunk.length + section.length) > maxChunkSize && currentChunk.length > 0) {
+        chunks.push(currentChunk);
+        currentChunk = '';
+      }
+      currentChunk += section;
     }
-
-    if ((currentChunk.length + paragraph.length + 1) > maxChunkSize && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = '';
-    }
-    currentChunk += (currentChunk.length > 0 ? '\n' : '') + paragraph;
   }
   
   if (currentChunk.length > 0) {
@@ -74,7 +96,7 @@ export default function App() {
   const [tokenCount, setTokenCount] = useState<number | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
-  const [translationStage, setTranslationStage] = useState<'extracting' | 'analyzing' | 'translating' | null>(null);
+  const [translationStage, setTranslationStage] = useState<'extracting' | 'repairing' | 'analyzing' | 'translating' | null>(null);
   const [glossary, setGlossary] = useState<string>('');
   const [currentChunk, setCurrentChunk] = useState(0);
   const [totalChunks, setTotalChunks] = useState(0);
@@ -377,13 +399,21 @@ export default function App() {
               
               if (hasRawText) {
                 // Use raw text and ask LLM to format it
-                systemInstruction = "You are a precise text formatting tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, and preserve ALL original text exactly. DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
-                parts.push({ text: `你是一個專業的排版助手。以下是從 PDF 底層直接提取出來的純文字。請幫我將這些文字重新排版成乾淨的 Markdown 格式（修復不正常的斷行、還原標題層級等）。\n\n【重要規則】：\n1. **絕對不要翻譯**：保持原始語言。\n2. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n3. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。\n\n原始文字：\n${chunkRawText}` });
+                systemInstruction = "You are a precise text formatting tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
+                parts.push({ text: `你是一個專業的排版助手。以下是從 PDF 底層直接提取出來的純文字。請幫我將這些文字重新排版成乾淨的 Markdown 格式（修復不正常的斷行、還原標題層級等）。
+
+【特別注意】：
+1. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起導致拼字錯誤。
+2. **絕對不要翻譯**：保持原始語言。
+3. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。
+
+原始文字：
+${chunkRawText}` });
               } else {
                 // Fallback to Vision OCR for scanned PDFs
-                systemInstruction = "You are a precise OCR and text extraction tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as Markdown. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content, and DO NOT hallucinate or generate content that is not present in the images. If you see a Table of Contents, ONLY transcribe the Table of Contents, DO NOT generate the chapters themselves.";
+                systemInstruction = "You are a precise OCR and text extraction tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as Markdown. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
                 parts.push({ inlineData: { data: chunkBase64, mimeType: 'application/pdf' } });
-                parts.push({ text: '你是一個精準的 OCR 與文字提取工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字逐句」完整提取出來，並轉換為乾淨的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字，無論是英文、中文或其他語言，都請保持原樣。\n2. **絕對不要遺漏任何內容**：包含封面文字、版權宣告、目錄 (Table of Contents)、前言、章節標題與所有內文，都必須完整提取。\n3. **絕對不要自行腦補或擴寫**：如果遇到目錄，請只輸出目錄的文字，絕對不要根據目錄的標題去生成或猜測後續的內文。\n4. **絕對不要總結或縮減**：請保留所有原始文字。\n5. **保留原始格式**：請保留原始的標題層級（使用 #, ## 等）、列表和段落格式。\n6. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋（例如「好的，這是提取的文字...」）。' });
+                parts.push({ text: '你是一個精準的 OCR 與文字提取工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字逐句」完整提取出來，並轉換為乾淨的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **識別上標註解**：請特別注意字尾的小數字（上標），這些通常是引用或註解。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔，不要混淆為單字的一部分。\n2. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n3. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n4. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
               }
 
               const responseStream = await ai.models.generateContentStream({
@@ -424,6 +454,45 @@ export default function App() {
         }
       }
       
+      // --- STAGE 1.2: SOURCE TEXT REPAIR ---
+      setTranslationStage('repairing');
+      setStatusMessage('正在優化原始文本結構與修復斷句...');
+      
+      // Split for repair if text is very long to avoid context limits
+      const repairChunks = splitTextIntoChunks(fullMarkdown, 8000);
+      let repairedMarkdown = '';
+      
+      for (let i = 0; i < repairChunks.length; i++) {
+        setStatusMessage(`正在優化文本結構 (第 ${i + 1}/${repairChunks.length} 部分)...`);
+        try {
+          const repairResponse = await ai.models.generateContent({
+            model: selectedModel,
+            contents: {
+              parts: [
+                { text: `你是一個專業的文本修復助手。以下是從 PDF 提取出的 Markdown 文本，可能存在不正常的斷句、多餘的空格或格式混亂。請在不改變任何原意的前提下，修復這些結構問題，確保句子完整且邏輯連貫。
+
+【嚴格規則】：
+1. **絕對不要翻譯**：保持原始語言。
+2. **絕對不要刪減或總結**：必須 100% 保留所有原始資訊。
+3. **確保內容正確**：不要添加任何原文中沒有的資訊。
+4. **直接輸出修復後的 Markdown**：不要有任何解釋。
+
+待修復文本：
+${repairChunks[i]}` }
+              ]
+            },
+            config: { temperature: 0.1 }
+          });
+          repairedMarkdown += (repairResponse.text || repairChunks[i]) + '\n\n';
+          setExtractedText(repairedMarkdown);
+        } catch (err) {
+          console.warn("Repair failed for chunk, using original", err);
+          repairedMarkdown += repairChunks[i] + '\n\n';
+        }
+      }
+      fullMarkdown = repairedMarkdown.trim();
+      setExtractedText(fullMarkdown);
+
       // --- STAGE 1.5: GLOSSARY GENERATION & STYLE ANALYSIS ---
       setTranslationStage('analyzing');
       setStatusMessage('正在提取專業術語與分析文本風格...');
@@ -436,13 +505,13 @@ export default function App() {
             model: selectedModel,
             contents: {
               parts: [
-                { text: `你是一位資深的編譯專家。請閱讀以下文本，並執行以下任務：
-1. **識別核心概念**：提取文本中反覆出現、具有特定含義的核心術語、技術專有名詞、縮寫或品牌名稱。
-2. **建立權威譯名表**：為這些術語提供最精準、符合台灣習慣的繁體中文譯名。
-3. **處理歧義**：若某個術語在文中有多種可能譯法，請根據上下文選定一個「全域統一」的譯名。
+                { text: `你是一位專業的術語與角色管理專家。請深度閱讀以下文本，並執行以下任務：
+1. **核心術語與實體提取**：識別文本中的關鍵技術術語、專有名詞。
+2. **文學要素提取 (若為小說)**：特別提取「人物名稱」、「地理位置」、「核心意象」或「特定物品」。
+3. **全域一致性定義**：為每個項目選定一個最精準、符合繁體中文習慣的譯名。對於角色，請根據其性別與身份選定合適的譯名。
 
-請以純文字列表格式輸出，格式為：「- [英文術語]: [繁體中文譯名]」。
-如果沒有明顯的專業術語，請輸出「無」。不要輸出任何開頭、結尾或解釋性文字。
+請以純文字列表格式輸出，格式為：「- [英文名稱]: [繁體中文譯名]」。
+如果沒有明顯的項目，請輸出「無」。不要輸出任何開頭、結尾或解釋性文字。
 
 文本內容：
 ${fullMarkdown.substring(0, 50000)}` }
@@ -456,15 +525,18 @@ ${fullMarkdown.substring(0, 50000)}` }
             model: selectedModel,
             contents: {
               parts: [
-                { text: `請分析以下文本的「文體類型」、「目標讀者」與「語氣風格」。
-例如：這是一份「針對一般大眾的健康科普文章」，語氣應「親切且易於理解」；或者這是一份「針對資深工程師的 API 技術文件」，語氣應「極度嚴謹、精確且專業」。
+                { text: `請作為資深文學編輯與編譯專家，為以下文本制定一份「翻譯風格指南」。請分析：
+1. **文本領域與類型**：(如：硬核科幻、浪漫小說、技術文件、學術論文)
+2. **敘事視角與語氣**：(如：冷峻的第三人稱、感性的第一人稱、正式客觀)
+3. **目標受眾與文化背景**：(如：青少年讀者、專業研究員、一般大眾)
+4. **特定風格規範**：(如：對話是否應口語化、是否保留特定外來語、對讀者的稱呼)
 
-請以簡短的一句話總結翻譯時應採用的風格指南。
-例如：「採用嚴謹專業、精確客觀的學術論文風格」或「採用生動流暢、充滿感染力的文學敘事風格」。
+請將以上分析總結成一段具體的「翻譯指令」。
+例如 (若為小說)：「這是一部帶有憂鬱色彩的現代小說。請採用流暢、具有文學美感的繁體中文，避免生硬的翻譯腔。對話應符合角色性格，保留原文的隱喻與情感張力。」
 不要輸出任何多餘的解釋。
 
 文本內容：
-${fullMarkdown.substring(0, 3000)}` }
+${fullMarkdown.substring(0, 5000)}` }
               ]
             }
           }).catch(err => {
@@ -501,18 +573,24 @@ ${fullMarkdown.substring(0, 3000)}` }
         const MAX_RETRIES = 6;
         let currentChunkTranslated = '';
 
-        const promptText = `你是一個專業的翻譯與校對工具。你的任務是將以下 Markdown 格式的文本翻譯成繁體中文。
+        const promptText = `你是一位世界級的專業翻譯專家，精通技術文件與學術著作的編譯。
+請將以下 Markdown 文本翻譯成繁體中文。
 
-【翻譯風格要求】：${detectedStyle}
-${glossaryText !== '無' ? `【參考詞彙表 (Glossary) - 請確保譯名一致】：\n${glossaryText}\n\n` : ''}${previousTranslatedText ? `【上一段的譯文參考 (請確保上下文銜接自然)】：\n${previousTranslatedText}\n\n` : ''}
-【嚴格規則】：
-1. **絕對忠於原文**：請逐句翻譯，**嚴禁遺漏任何句子、段落或標題**。
-2. **嚴禁總結或刪減**：即使內容重複或看似不重要，也必須完整翻譯。
-3. **保留 Markdown 格式**：所有的標題 (#)、列表 (-)、粗體 (**) 等語法必須原封不動地保留。
-4. **術語一致性**：請務必遵守提供的專業術語對照表。
-5. **直接輸出譯文**：不要有任何開頭或結尾的解釋。
+【翻譯指南】：
+1. **風格目標**：${detectedStyle}
+2. **術語一致性**：${glossaryText !== '無' ? `必須嚴格遵守以下術語表：\n${glossaryText}` : '保持專有名詞前後統一。'}
+3. **上下文銜接**：${previousTranslatedText ? `參考上一段的譯文風格：\n${previousTranslatedText}` : '這是文件的開頭。'}
 
-【需要翻譯的內容】：
+【執行步驟】：
+第一步：**精準直譯**。確保不遺漏任何標題、段落、列表、註釋或 Markdown 標記。
+第二步：**語意潤色**。在不改變原意的前提下，調整句式使其符合繁體中文的閱讀習慣，消除生硬的翻譯感。
+第三步：**自我校對**。檢查是否有漏譯、術語不統一或語意模糊的地方。
+
+【嚴格禁令】：
+- 嚴禁摘要、嚴禁刪減、嚴禁跳過任何內容。
+- 嚴禁輸出任何與譯文無關的解釋、評論或提示詞。
+
+【待翻譯文本】：
 ${textChunks[i]}`;
 
         while (!success && retries < MAX_RETRIES) {
@@ -1337,7 +1415,8 @@ ${textChunks[i]}`;
                   <div className="flex justify-between text-sm font-semibold text-slate-400">
                     <span>
                       {translationStage === 'extracting' ? `提取文字進度: ${Math.round((currentChunk / totalChunks) * 100)}%` : 
-                       translationStage === 'analyzing' ? '正在分析文本...' : 
+                       translationStage === 'repairing' ? '正在優化原始文本結構...' :
+                       translationStage === 'analyzing' ? '正在分析文本風格...' : 
                        `翻譯進度: ${Math.round((currentChunk / totalChunks) * 100)}%`}
                     </span>
                     {estimatedRemainingTime !== null && translationStage === 'translating' && (
@@ -1443,7 +1522,7 @@ ${textChunks[i]}`;
                   </div>
                 ) : (
                   <div id="translation-result-content" className="prose prose-invert max-w-none prose-headings:font-semibold prose-a:text-blue-400">
-                    <ReactMarkdown>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
+                    <ReactMarkdown>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'repairing' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
                     {(isTranslating || isExtracting) && (
                       <div className="mt-4 flex items-center text-slate-400 text-sm">
                         <Loader2 className="w-4 h-4 animate-spin mr-2 text-blue-500" />
