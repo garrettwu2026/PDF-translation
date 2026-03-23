@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import ReactMarkdown from 'react-markdown';
 // @ts-ignore
-import html2pdf from 'html2pdf.js';
+import html2pdf from 'html2pdf.js/dist/html2pdf.min.js';
 import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -604,33 +604,126 @@ ${textChunks[i]}`;
     }
     
     setIsDownloadingPdf(true);
-    // 讓 React 有時間渲染 loading 狀態
-    await new Promise(resolve => setTimeout(resolve, 50));
-    
     try {
       const element = document.getElementById('translation-result-content');
       if (!element) throw new Error("找不到內容元素");
 
+      const contentHtml = element.innerHTML;
       const defaultTitle = activeTab === 'translate' 
         ? `${file?.name.replace(/\.(pdf|md)$/i, '') || 'document'}_翻譯`
         : (customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document');
 
-      const opt: any = {
-        margin:       15,
-        filename:     `${defaultTitle}.pdf`,
-        image:        { type: 'jpeg' as const, quality: 0.98 },
-        html2canvas:  { scale: 2, useCORS: true, logging: false },
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
-      };
-      
-      const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
-      await html2pdfFn().set(opt).from(element).save();
-      
-      showToast('已下載 PDF 檔案', 'success');
-    } catch (err) {
-      console.error("Failed to generate PDF:", err);
-      showToast("生成 PDF 失敗", 'error');
+      // 建立列印專用的隱藏 Iframe
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = 'none';
+      document.body.appendChild(iframe);
+
+      const iframeDoc = iframe.contentWindow?.document;
+      if (!iframeDoc) throw new Error("無法建立列印環境");
+
+      // 寫入內容與專為 PDF 優化的列印樣式
+      iframeDoc.open();
+      iframeDoc.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>${defaultTitle}</title>
+            <style>
+              @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+              
+              body { 
+                font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif; 
+                padding: 20mm; 
+                color: #000000; 
+                background: #ffffff;
+                line-height: 1.6;
+                font-size: 12pt;
+              }
+              
+              /* 確保長文件分頁正常 */
+              * { 
+                box-sizing: border-box; 
+                -webkit-print-color-adjust: exact; 
+                print-color-adjust: exact;
+              }
+              
+              h1 { font-size: 24pt; border-bottom: 2px solid #333; padding-bottom: 10px; margin-top: 0; }
+              h2 { font-size: 20pt; margin-top: 25px; border-bottom: 1px solid #eee; page-break-after: avoid; }
+              h3 { font-size: 16pt; margin-top: 20px; page-break-after: avoid; }
+              
+              p, li { margin-bottom: 10px; word-wrap: break-word; }
+              
+              pre { 
+                background: #f4f4f4 !important; 
+                padding: 15px; 
+                border-radius: 5px; 
+                white-space: pre-wrap; 
+                word-wrap: break-word;
+                font-size: 10pt;
+                border: 1px solid #ddd;
+              }
+              
+              code { 
+                background: #f4f4f4 !important; 
+                padding: 2px 5px; 
+                border-radius: 3px; 
+                font-family: monospace; 
+              }
+              
+              blockquote { 
+                border-left: 5px solid #ddd; 
+                padding-left: 20px; 
+                color: #444; 
+                font-style: italic; 
+                margin: 20px 0;
+              }
+              
+              table { 
+                width: 100%; 
+                border-collapse: collapse; 
+                margin: 20px 0; 
+                page-break-inside: auto;
+              }
+              
+              tr { page-break-inside: avoid; page-break-after: auto; }
+              th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+              th { background: #f9f9f9 !important; }
+              
+              img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+              
+              @page {
+                size: A4;
+                margin: 15mm;
+              }
+            </style>
+          </head>
+          <body>
+            <div id="content">${contentHtml}</div>
+            <script>
+              window.onload = function() {
+                setTimeout(function() {
+                  window.print();
+                  // 延遲移除 iframe，確保列印對話框已彈出
+                  setTimeout(function() {
+                    window.frameElement.parentNode.removeChild(window.frameElement);
+                  }, 1000);
+                }, 500);
+              };
+            </script>
+          </body>
+        </html>
+      `);
+      iframeDoc.close();
+
+      showToast('請在列印對話框中選擇「另存為 PDF」', 'success');
+    } catch (err: any) {
+      console.error("PDF Error:", err);
+      showToast(`生成 PDF 失敗: ${err.message}`, 'error');
     } finally {
       setIsDownloadingPdf(false);
     }

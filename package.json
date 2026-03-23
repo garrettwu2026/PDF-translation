@@ -23,7 +23,7 @@
     "express": "^4.21.2",
     "google-auth-library": "^10.6.2",
     "googleapis": "^171.4.0",
-    "html2pdf.js": "^0.14.0",
+    "html2pdf.js": "^0.10.1",
     "lucide-react": "^0.546.0",
     "marked": "^17.0.5",
     "motion": "^12.23.24",

@@ -1,2 +1,61 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+
+/* Fix for html2canvas/html2pdf not supporting oklch colors from Tailwind 4 */
+#translation-result-content, 
+#pdf-clone-content,
+#translation-result-content *,
+#pdf-clone-content * {
+  /* Force standard colors using !important to override Tailwind 4 oklch variables */
+  --tw-prose-body: #d1d5db !important;
+  --tw-prose-headings: #f8fafc !important;
+  --tw-prose-links: #60a5fa !important;
+  --tw-prose-bold: #f8fafc !important;
+  --tw-prose-counters: #94a3b8 !important;
+  --tw-prose-bullets: #475569 !important;
+  --tw-prose-hr: #334155 !important;
+  --tw-prose-quotes: #f1f5f9 !important;
+  --tw-prose-quote-borders: #334155 !important;
+  --tw-prose-captions: #94a3b8 !important;
+  --tw-prose-code: #f8fafc !important;
+  --tw-prose-pre-code: #e2e8f0 !important;
+  --tw-prose-pre-bg: #0f172a !important;
+  --tw-prose-th-borders: #334155 !important;
+  --tw-prose-td-borders: #1e293b !important;
+  
+  /* Fallback for standard CSS properties */
+  color: #d1d5db !important;
+  border-color: #334155 !important;
+  text-decoration-color: #60a5fa !important;
+}
+
+#translation-result-content,
+#pdf-clone-content {
+  background-color: #0f172a !important;
+  padding: 20px !important;
+  width: 100% !important;
+  max-width: 800px !important;
+  margin: 0 auto !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+
+/* Ensure standard colors for printing/PDF capture */
+@media print {
+  #translation-result-content,
+  #pdf-clone-content,
+  #translation-result-content *,
+  #pdf-clone-content * {
+    color: #1a1a1a !important;
+    background-color: #ffffff !important;
+    --tw-prose-body: #1a1a1a !important;
+    --tw-prose-headings: #000000 !important;
+    --tw-prose-links: #2563eb !important;
+    --tw-prose-pre-bg: #f8fafc !important;
+    --tw-prose-pre-code: #1a1a1a !important;
+  }
+  #translation-result-content,
+  #pdf-clone-content {
+    background-color: #ffffff !important;
+  }
+}
