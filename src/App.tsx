@@ -75,6 +75,7 @@ export default function App() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationStage, setTranslationStage] = useState<'extracting' | 'analyzing' | 'translating' | null>(null);
+  const [glossary, setGlossary] = useState<string>('');
   const [currentChunk, setCurrentChunk] = useState(0);
   const [totalChunks, setTotalChunks] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
@@ -435,7 +436,16 @@ export default function App() {
             model: selectedModel,
             contents: {
               parts: [
-                { text: `請從以下文本中提取關鍵的專業術語、專有名詞及縮寫，並建立一份繁體中文的翻譯對照表 (Glossary)。請以純文字列表格式輸出，例如「- Term: 翻譯」。如果沒有明顯的專業術語，請輸出「無」。不要輸出任何其他解釋。\n\n文本內容：\n${fullMarkdown.substring(0, 50000)}` }
+                { text: `你是一位資深的編譯專家。請閱讀以下文本，並執行以下任務：
+1. **識別核心概念**：提取文本中反覆出現、具有特定含義的核心術語、技術專有名詞、縮寫或品牌名稱。
+2. **建立權威譯名表**：為這些術語提供最精準、符合台灣習慣的繁體中文譯名。
+3. **處理歧義**：若某個術語在文中有多種可能譯法，請根據上下文選定一個「全域統一」的譯名。
+
+請以純文字列表格式輸出，格式為：「- [英文術語]: [繁體中文譯名]」。
+如果沒有明顯的專業術語，請輸出「無」。不要輸出任何開頭、結尾或解釋性文字。
+
+文本內容：
+${fullMarkdown.substring(0, 50000)}` }
               ]
             }
           }).catch(err => {
@@ -446,7 +456,15 @@ export default function App() {
             model: selectedModel,
             contents: {
               parts: [
-                { text: `請閱讀以下文本的前幾個段落，判斷這屬於什麼樣的作品（例如：學術論文、商業報告、小說、技術文件、新聞報導等），並決定最適合的繁體中文翻譯風格（例如：嚴謹專業、生動流暢、通俗易懂、正式客觀等）。請以簡短的一句話總結你選擇的翻譯風格，例如：「嚴謹專業的學術論文風格」或「生動流暢的小說風格」。不要輸出其他多餘的解釋。\n\n文本內容：\n${fullMarkdown.substring(0, 2000)}` }
+                { text: `請分析以下文本的「文體類型」、「目標讀者」與「語氣風格」。
+例如：這是一份「針對一般大眾的健康科普文章」，語氣應「親切且易於理解」；或者這是一份「針對資深工程師的 API 技術文件」，語氣應「極度嚴謹、精確且專業」。
+
+請以簡短的一句話總結翻譯時應採用的風格指南。
+例如：「採用嚴謹專業、精確客觀的學術論文風格」或「採用生動流暢、充滿感染力的文學敘事風格」。
+不要輸出任何多餘的解釋。
+
+文本內容：
+${fullMarkdown.substring(0, 3000)}` }
               ]
             }
           }).catch(err => {
