@@ -30,21 +30,51 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing markdown content' });
       }
 
-      let htmlContent = await marked.parse(markdown);
-      
-      // Remove all img, picture, and svg tags because epub-gen-memory fails with non-absolute/base64 URLs
-      htmlContent = htmlContent.replace(/<img[^>]*>/g, '');
-      htmlContent = htmlContent.replace(/<picture[^>]*>[\s\S]*?<\/picture>/gi, '');
-      htmlContent = htmlContent.replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, '');
-      
+      const tokens = marked.lexer(markdown);
+      const chapters: { title: string; raw: string }[] = [];
+      let currentChapter = { title: '前言', raw: '' };
+
+      for (const token of tokens) {
+        if (token.type === 'heading' && (token.depth === 1 || token.depth === 2 || token.depth === 3)) {
+          if (currentChapter.raw.trim()) {
+            chapters.push(currentChapter);
+          }
+          currentChapter = { title: token.text, raw: token.raw };
+        } else {
+          currentChapter.raw += token.raw;
+        }
+      }
+      if (currentChapter.raw.trim()) {
+        chapters.push(currentChapter);
+      }
+
+      const epubChapters = await Promise.all(chapters.map(async (ch) => {
+        let htmlContent = await marked.parse(ch.raw);
+        
+        // Remove all img, picture, and svg tags because epub-gen-memory fails with non-absolute/base64 URLs
+        htmlContent = htmlContent.replace(/<img[^>]*>/g, '');
+        htmlContent = htmlContent.replace(/<picture[^>]*>[\s\S]*?<\/picture>/gi, '');
+        htmlContent = htmlContent.replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, '');
+        
+        return {
+          title: ch.title,
+          content: htmlContent
+        };
+      }));
+
+      if (epubChapters.length === 0) {
+        epubChapters.push({ title: '內容', content: '<p>無內容</p>' });
+      }
+
       const epubBuffer = await epub(
         { 
           title: title || 'Translated Document', 
           author: 'AI Translator',
           date: new Date().toISOString().split('.')[0] + 'Z',
-          lang: 'zh-TW'
+          lang: 'zh-TW',
+          tocTitle: '目錄'
         },
-        [{ title: 'Content', content: htmlContent }]
+        epubChapters
       );
 
       res.setHeader('Content-Type', 'application/epub+zip');
