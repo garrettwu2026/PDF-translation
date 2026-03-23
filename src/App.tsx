@@ -1,8 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import ReactMarkdown from 'react-markdown';
-import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X } from 'lucide-react';
+// @ts-ignore
+import html2pdf from 'html2pdf.js';
+import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const uint8ArrayToBase64 = (bytes: Uint8Array) => {
   let binary = '';
@@ -20,25 +26,82 @@ const MODELS = [
   { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite', inputPrice: 0.075, outputPrice: 0.30 },
 ];
 
+const splitTextIntoChunks = (text: string, maxChunkSize: number = 4000) => {
+  const paragraphs = text.split('\n');
+  const chunks: string[] = [];
+  let currentChunk = '';
+
+  for (const paragraph of paragraphs) {
+    // If a single paragraph is longer than maxChunkSize, we have to split it
+    if (paragraph.length > maxChunkSize) {
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk);
+        currentChunk = '';
+      }
+      
+      let remainingParagraph = paragraph;
+      while (remainingParagraph.length > maxChunkSize) {
+        chunks.push(remainingParagraph.substring(0, maxChunkSize));
+        remainingParagraph = remainingParagraph.substring(maxChunkSize);
+      }
+      currentChunk = remainingParagraph;
+      continue;
+    }
+
+    if ((currentChunk.length + paragraph.length + 1) > maxChunkSize && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = '';
+    }
+    currentChunk += (currentChunk.length > 0 ? '\n' : '') + paragraph;
+  }
+  
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+  
+  return chunks;
+};
+
 export default function App() {
-  const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
+  const [activeTab, setActiveTab] = useState<'translate' | 'converter'>('translate');
+  const [customTitle, setCustomTitle] = useState('');
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractedText, setExtractedText] = useState('');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.1-flash-lite-preview');
+  const [splitTranslation, setSplitTranslation] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [translationStage, setTranslationStage] = useState<'extracting' | 'analyzing' | 'translating' | null>(null);
   const [currentChunk, setCurrentChunk] = useState(0);
   const [totalChunks, setTotalChunks] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [translatedText, setTranslatedText] = useState('');
+  const [translationStyle, setTranslationStyle] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState('');
-  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
-  const [autoDownload, setAutoDownload] = useState<'none' | 'epub' | 'pdf'>('epub');
-  const [pendingDownload, setPendingDownload] = useState<'epub' | 'pdf' | null>(null);
+  const [toast, setToast] = useState<{id: number, message: string, type: 'success' | 'error'} | null>(null);
+  const [autoDownload, setAutoDownload] = useState<'none' | 'epub' | 'pdf' | 'md'>('md');
+  const [pendingDownload, setPendingDownload] = useState<'epub' | 'pdf' | 'md' | null>(null);
+  const [isIframe, setIsIframe] = useState(false);
+  
+  // Action states
+  const [isCopying, setIsCopying] = useState(false);
+  const [isDownloadingEpub, setIsDownloadingEpub] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    setIsIframe(window !== window.parent);
+  }, []);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 5000);
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToast({ id: Date.now(), message, type });
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 5000);
   };
   const [error, setError] = useState<string | null>(null);
   const [isKeySelected, setIsKeySelected] = useState(false);
@@ -102,23 +165,27 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (base64Data) {
-      calculateTokens(base64Data, selectedModel);
+    if (base64Data && file) {
+      calculateTokens(base64Data, selectedModel, file);
     }
-  }, [selectedModel, base64Data]);
+  }, [selectedModel, base64Data, file]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
     
-    if (selectedFile.type !== 'application/pdf') {
-      setError('請上傳 PDF 檔案 (Please upload a PDF file).');
+    const isPdf = selectedFile.type === 'application/pdf';
+    const isMd = selectedFile.name.toLowerCase().endsWith('.md');
+
+    if (!isPdf && !isMd) {
+      setError('請上傳 PDF 或 Markdown 檔案 (Please upload a PDF or MD file).');
       return;
     }
     
     setError(null);
     setFile(selectedFile);
     setTranslatedText('');
+    setExtractedText('');
     setTokenCount(null);
     
     const reader = new FileReader();
@@ -126,15 +193,19 @@ export default function App() {
       const base64 = (event.target?.result as string).split(',')[1];
       setBase64Data(base64);
       
-      try {
-        const arrayBuffer = await selectedFile.arrayBuffer();
-        const pdfDoc = await PDFDocument.load(arrayBuffer);
-        setTotalPages(pdfDoc.getPageCount());
-      } catch (e) {
-        console.error("Failed to parse PDF pages", e);
+      if (isPdf) {
+        try {
+          const arrayBuffer = await selectedFile.arrayBuffer();
+          const pdfDoc = await PDFDocument.load(arrayBuffer);
+          setTotalPages(pdfDoc.getPageCount());
+        } catch (e) {
+          console.error("Failed to parse PDF pages", e);
+        }
+      } else if (isMd) {
+        setTotalPages(0);
+        const text = await selectedFile.text();
+        setExtractedText(text);
       }
-      
-      await calculateTokens(base64, selectedModel);
     };
     reader.onerror = () => {
       setError('讀取檔案失敗 (Failed to read file).');
@@ -142,23 +213,84 @@ export default function App() {
     reader.readAsDataURL(selectedFile);
   };
 
-  const calculateTokens = async (base64: string, modelId: string) => {
+  const calculateTokens = async (base64: string, modelId: string, currentFile?: File) => {
     setIsCalculating(true);
     setError(null);
     try {
       const apiKey = isManualKeyActive ? manualApiKey : (process.env.API_KEY || process.env.GEMINI_API_KEY);
       if (!apiKey) throw new Error("API Key 尚未設定");
       const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.countTokens({
-        model: modelId,
-        contents: {
-          parts: [
-            { inlineData: { data: base64, mimeType: 'application/pdf' } },
-            { text: 'Translate this document into Traditional Chinese.' }
-          ]
+      
+      const fileToUse = currentFile || file;
+      if (!fileToUse) throw new Error("File not found");
+      
+      let totalTokens = 0;
+      const isMd = fileToUse.name.toLowerCase().endsWith('.md');
+
+      if (isMd) {
+        const text = await fileToUse.text();
+        const response = await ai.models.countTokens({
+          model: modelId,
+          contents: {
+            parts: [
+              { text: text },
+              { text: 'Translate this document into Traditional Chinese.' }
+            ]
+          }
+        });
+        totalTokens = response.totalTokens;
+      } else {
+        const arrayBuffer = await fileToUse.arrayBuffer();
+        const pdfDoc = await PDFDocument.load(arrayBuffer);
+        const pageCount = pdfDoc.getPageCount();
+        
+        if (pageCount <= 1000) {
+          const response = await ai.models.countTokens({
+            model: modelId,
+            contents: {
+              parts: [
+                { inlineData: { data: base64, mimeType: 'application/pdf' } },
+                { text: 'Translate this document into Traditional Chinese.' }
+              ]
+            }
+          });
+          totalTokens = response.totalTokens;
+        } else {
+          const CHUNK_SIZE = 500;
+          const chunks = Math.ceil(pageCount / CHUNK_SIZE);
+          
+          for (let i = 0; i < chunks; i++) {
+            const startPage = i * CHUNK_SIZE;
+            const endPage = Math.min(startPage + CHUNK_SIZE, pageCount) - 1;
+            const pageIndices = Array.from({length: endPage - startPage + 1}, (_, idx) => startPage + idx);
+            
+            const chunkPdf = await PDFDocument.create();
+            const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
+            copiedPages.forEach(page => chunkPdf.addPage(page));
+            
+            const chunkBytes = await chunkPdf.save();
+            const chunkBase64 = uint8ArrayToBase64(chunkBytes);
+            
+            const response = await ai.models.countTokens({
+              model: modelId,
+              contents: {
+                parts: [
+                  { inlineData: { data: chunkBase64, mimeType: 'application/pdf' } },
+                  { text: 'Translate this document into Traditional Chinese.' }
+                ]
+              }
+            });
+            totalTokens += response.totalTokens;
+          }
         }
-      });
-      setTokenCount(response.totalTokens);
+      }
+      
+      // Multiply by 6 to roughly estimate the multi-stage process:
+      // 1. PDF -> Markdown (1x)
+      // 2. Markdown -> Glossary (~0.5x)
+      // 3. Markdown + Glossary + Context -> Translation (~0.8x)
+      // 4. Extra buffer as requested (6x total)
+      setTokenCount(Math.round(totalTokens * 6));
     } catch (err: any) {
       console.error(err);
       setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
@@ -171,12 +303,15 @@ export default function App() {
   const handleTranslate = async () => {
     if (!file || !base64Data) return;
     setIsTranslating(true);
+    setTranslationStage('extracting');
     setTranslatedText('');
+    setTranslationStyle(null);
     setStatusMessage('');
     setError(null);
     setCurrentChunk(0);
     setTotalChunks(0);
-    setStartTime(Date.now());
+    const currentStartTime = Date.now();
+    setStartTime(currentStartTime);
     setEstimatedRemainingTime(null);
     
     try {
@@ -184,39 +319,138 @@ export default function App() {
       if (!apiKey) throw new Error("API Key 尚未設定");
       const ai = new GoogleGenAI({ apiKey });
       
-      const arrayBuffer = await file.arrayBuffer();
-      const pdfDoc = await PDFDocument.load(arrayBuffer);
-      const pageCount = pdfDoc.getPageCount();
+      let fullMarkdown = '';
+      const isMd = file.name.toLowerCase().endsWith('.md');
       
-      const CHUNK_SIZE = 5; // Translate 5 pages at a time to reduce total requests
-      const chunks = Math.ceil(pageCount / CHUNK_SIZE);
-      setTotalChunks(chunks);
-      
-      // Initial estimation: ~15s per chunk (5 pages) + 3s delay
-      if (chunks > 0) {
-        setEstimatedRemainingTime(chunks * 18);
+      if (isMd || extractedText) {
+        fullMarkdown = extractedText;
+      } else {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdfDoc = await PDFDocument.load(arrayBuffer);
+        const pageCount = pdfDoc.getPageCount();
+        
+        // --- STAGE 1: EXTRACTION ---
+        setStatusMessage('正在從 PDF 提取文字...');
+        const EXTRACTION_CHUNK_SIZE = 10; // Extract 10 pages at a time
+        const extractionChunks = Math.ceil(pageCount / EXTRACTION_CHUNK_SIZE);
+        setTotalChunks(extractionChunks);
+        
+        for (let i = 0; i < extractionChunks; i++) {
+          setCurrentChunk(i + 1);
+          setStatusMessage(`正在提取文字 (第 ${i + 1}/${extractionChunks} 部分)...`);
+          
+          const chunkPdf = await PDFDocument.create();
+          const startPage = i * EXTRACTION_CHUNK_SIZE;
+          const endPage = Math.min(startPage + EXTRACTION_CHUNK_SIZE, pageCount) - 1;
+          const pageIndices = Array.from({length: endPage - startPage + 1}, (_, idx) => startPage + idx);
+          
+          const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
+          copiedPages.forEach(page => chunkPdf.addPage(page));
+          
+          const chunkBytes = await chunkPdf.save();
+          const chunkBase64 = uint8ArrayToBase64(chunkBytes);
+          
+          let success = false;
+          let retries = 0;
+          const MAX_RETRIES = 3;
+          
+          while (!success && retries < MAX_RETRIES) {
+            try {
+              const responseStream = await ai.models.generateContentStream({
+                model: selectedModel,
+                contents: {
+                  parts: [
+                    { inlineData: { data: chunkBase64, mimeType: 'application/pdf' } },
+                    { text: '請將這份 PDF 文件的內容提取出來，並轉換為乾淨的 Markdown 格式。保留標題、列表和基本的格式。直接輸出 Markdown，不要有任何解釋。' }
+                  ]
+                }
+              });
+              
+              let chunkExtractedText = '';
+              for await (const chunk of responseStream) {
+                const text = chunk.text || '';
+                chunkExtractedText += text;
+                setExtractedText(fullMarkdown + chunkExtractedText);
+              }
+              fullMarkdown += chunkExtractedText + '\n\n';
+              setExtractedText(fullMarkdown);
+              success = true;
+            } catch (err: any) {
+              retries++;
+              if (retries >= MAX_RETRIES) throw err;
+              await new Promise(resolve => setTimeout(resolve, 2000 * retries));
+            }
+          }
+        }
       }
       
-      let fullText = '';
+      // --- STAGE 1.5: GLOSSARY GENERATION & STYLE ANALYSIS ---
+      setTranslationStage('analyzing');
+      setStatusMessage('正在提取專業術語與分析文本風格...');
+      let glossaryText = '無';
+      let detectedStyle = '一般/通用';
       
-      for (let i = 0; i < chunks; i++) {
+      try {
+        const [glossaryResponse, styleResponse] = await Promise.all([
+          ai.models.generateContent({
+            model: selectedModel,
+            contents: {
+              parts: [
+                { text: `請從以下文本中提取關鍵的專業術語、專有名詞及縮寫，並建立一份繁體中文的翻譯對照表 (Glossary)。請以純文字列表格式輸出，例如「- Term: 翻譯」。如果沒有明顯的專業術語，請輸出「無」。不要輸出任何其他解釋。\n\n文本內容：\n${fullMarkdown.substring(0, 50000)}` }
+              ]
+            }
+          }).catch(err => {
+            console.warn("Glossary generation failed, continuing without it.", err);
+            return { text: '無' };
+          }),
+          ai.models.generateContent({
+            model: selectedModel,
+            contents: {
+              parts: [
+                { text: `請閱讀以下文本的前幾個段落，判斷這屬於什麼樣的作品（例如：學術論文、商業報告、小說、技術文件、新聞報導等），並決定最適合的繁體中文翻譯風格（例如：嚴謹專業、生動流暢、通俗易懂、正式客觀等）。請以簡短的一句話總結你選擇的翻譯風格，例如：「嚴謹專業的學術論文風格」或「生動流暢的小說風格」。不要輸出其他多餘的解釋。\n\n文本內容：\n${fullMarkdown.substring(0, 2000)}` }
+              ]
+            }
+          }).catch(err => {
+            console.warn("Style analysis failed, continuing with default style.", err);
+            return { text: '一般/通用' };
+          })
+        ]);
+        
+        glossaryText = glossaryResponse.text || '無';
+        detectedStyle = styleResponse.text?.trim() || '一般/通用';
+        setTranslationStyle(detectedStyle);
+      } catch (err) {
+        console.warn("Analysis failed, continuing with defaults.", err);
+        setTranslationStyle('一般/通用');
+      }
+      
+      // --- STAGE 2: TRANSLATION ---
+      setTranslationStage('translating');
+      setStatusMessage('正在準備翻譯...');
+      const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 3000) : [fullMarkdown];
+      const translationChunksCount = textChunks.length;
+      setTotalChunks(translationChunksCount);
+      setCurrentChunk(0);
+      
+      let fullTranslatedText = '';
+      let previousTranslatedText = '';
+      
+      for (let i = 0; i < translationChunksCount; i++) {
         setCurrentChunk(i + 1);
-        
-        const chunkPdf = await PDFDocument.create();
-        const startPage = i * CHUNK_SIZE;
-        const endPage = Math.min(startPage + CHUNK_SIZE, pageCount) - 1;
-        const pageIndices = Array.from({length: endPage - startPage + 1}, (_, idx) => startPage + idx);
-        
-        const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
-        copiedPages.forEach(page => chunkPdf.addPage(page));
-        
-        const chunkBytes = await chunkPdf.save();
-        const chunkBase64 = uint8ArrayToBase64(chunkBytes);
+        setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
         
         let success = false;
         let retries = 0;
         const MAX_RETRIES = 6;
-        let currentChunkText = '';
+        let currentChunkTranslated = '';
+
+        const promptText = `請將以下 Markdown 內容翻譯成繁體中文 (Traditional Chinese)。請保持原始的 Markdown 格式、標題、列表和連結。直接輸出翻譯內容，不要加上任何多餘的解釋或開場白。
+
+【翻譯風格要求】
+請使用「${detectedStyle}」進行翻譯。
+
+${glossaryText !== '無' ? `【參考詞彙表 (Glossary) - 請確保譯名一致】\n${glossaryText}\n\n` : ''}${previousTranslatedText ? `【上一段的譯文參考 (請確保上下文銜接自然)】\n${previousTranslatedText}\n\n` : ''}【需要翻譯的內容】
+${textChunks[i]}`;
 
         while (!success && retries < MAX_RETRIES) {
           try {
@@ -224,57 +458,53 @@ export default function App() {
               model: selectedModel,
               contents: {
                 parts: [
-                  { inlineData: { data: chunkBase64, mimeType: 'application/pdf' } },
-                  { text: '請將這份 PDF 文件的內容翻譯成繁體中文 (Traditional Chinese)。請盡可能保持原始的結構、段落和格式。請以 Markdown 格式輸出。直接輸出翻譯內容，不要加上任何多餘的解釋或開場白。' }
+                  { text: promptText }
                 ]
               }
             });
             
             for await (const chunk of responseStream) {
               const text = chunk.text || '';
-              currentChunkText += text;
-              setTranslatedText(fullText + currentChunkText);
+              currentChunkTranslated += text;
+              setTranslatedText(fullTranslatedText + currentChunkTranslated);
             }
             success = true;
           } catch (err: any) {
             const errorMessage = err.message?.toLowerCase() || '';
             const status = err.status;
             
-            // Check if it's a rate limit or quota error (429)
-            if (status === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('rate limit') || errorMessage.includes('too many') || errorMessage.includes('exhausted')) {
+            if (status === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('rate limit')) {
               retries++;
-              if (retries >= MAX_RETRIES) throw new Error(`已達到最大重試次數。API 頻率限制過嚴，請稍後再試。(${err.message})`);
-              
-              const waitTime = retries * 15; // Wait 15s, 30s, 45s...
+              if (retries >= MAX_RETRIES) throw new Error(`API 頻率限制過嚴，請稍後再試。(${err.message})`);
+              const waitTime = retries * 10;
               setStatusMessage(`API 限制，等待 ${waitTime} 秒後重試...`);
               await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
-              setStatusMessage('');
-              currentChunkText = ''; // Reset chunk text for the retry
+              setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
+              currentChunkTranslated = '';
             } else {
-              throw err; // Rethrow other errors (e.g., 400 Bad Request)
+              throw err;
             }
           }
         }
         
-        fullText += currentChunkText + '\n\n';
-        setTranslatedText(fullText);
+        fullTranslatedText += currentChunkTranslated + '\n\n';
+        setTranslatedText(fullTranslatedText);
+        previousTranslatedText = currentChunkTranslated.slice(-1000); // Keep last 1000 chars for context
         
-        // Calculate estimated remaining time
+        // Estimation update
         const now = Date.now();
-        const elapsed = now - (startTime || now);
-        const completedChunks = i + 1;
-        const avgTimePerChunk = elapsed / completedChunks;
-        const remaining = chunks - completedChunks;
-        setEstimatedRemainingTime(Math.round((avgTimePerChunk * remaining) / 1000));
+        const elapsed = now - currentStartTime;
+        const completed = i + 1;
+        const avg = elapsed / completed;
+        const remaining = translationChunksCount - completed;
+        setEstimatedRemainingTime(Math.round((avg * remaining) / 1000));
         
-        // Add a baseline delay between successful chunks to prevent hitting the RPM limit
-        if (i < chunks - 1) {
-          await new Promise(resolve => setTimeout(resolve, 3000));
+        if (i < translationChunksCount - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
       
-      // Auto download EPUB when finished
-      if (fullText && autoDownload !== 'none') {
+      if (fullTranslatedText && autoDownload !== 'none') {
         setPendingDownload(autoDownload);
       }
       
@@ -283,6 +513,7 @@ export default function App() {
       setError(`翻譯失敗 (Translation failed): ${err.message}`);
     } finally {
       setIsTranslating(false);
+      setTranslationStage(null);
       setCurrentChunk(0);
       setTotalChunks(0);
       setStatusMessage('');
@@ -297,6 +528,8 @@ export default function App() {
           downloadEpub(translatedText);
         } else if (pendingDownload === 'pdf') {
           downloadPdf();
+        } else if (pendingDownload === 'md') {
+          handleDownloadMarkdown();
         }
         setPendingDownload(null);
       }, 500);
@@ -304,67 +537,83 @@ export default function App() {
     }
   }, [pendingDownload, isTranslating, translatedText]);
 
-  const generatePdfBase64 = async (): Promise<string | null> => {
-    const element = document.getElementById('translation-result-content');
-    if (!element) return null;
+  const downloadPdf = async () => {
+    if (isIframe) {
+      showToast("在 AI Studio 預覽模式下無法下載檔案，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      return;
+    }
+    
+    setIsDownloadingPdf(true);
+    // 讓 React 有時間渲染 loading 狀態
+    await new Promise(resolve => setTimeout(resolve, 50));
     
     try {
-      // @ts-ignore
-      const html2pdf = (await import('html2pdf.js')).default;
+      const element = document.getElementById('translation-result-content');
+      if (!element) throw new Error("找不到內容元素");
+
+      const defaultTitle = activeTab === 'translate' 
+        ? `${file?.name.replace(/\.(pdf|md)$/i, '') || 'document'}_翻譯`
+        : (customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document');
+
       const opt: any = {
         margin:       15,
-        filename:     'temp.pdf',
+        filename:     `${defaultTitle}.pdf`,
         image:        { type: 'jpeg' as const, quality: 0.98 },
         html2canvas:  { scale: 2, useCORS: true, logging: false },
         jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
       };
       
-      const worker = html2pdf().set(opt).from(element);
-      const pdfBytes = await worker.output('arraybuffer');
-      return uint8ArrayToBase64(new Uint8Array(pdfBytes));
+      const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
+      await html2pdfFn().set(opt).from(element).save();
+      
+      showToast('已下載 PDF 檔案', 'success');
     } catch (err) {
-      console.error("Failed to generate PDF bytes:", err);
-      return null;
+      console.error("Failed to generate PDF:", err);
+      showToast("生成 PDF 失敗", 'error');
+    } finally {
+      setIsDownloadingPdf(false);
     }
   };
 
-  const downloadPdf = async () => {
-    const element = document.getElementById('translation-result-content');
-    if (!element) return;
+  const handleDownloadMarkdown = () => {
+    const text = activeTab === 'translate' ? translatedText : extractedText;
+    if (!text) return;
     
-    try {
-      setStatusMessage('正在產生 PDF...');
-      // @ts-ignore
-      const html2pdf = (await import('html2pdf.js')).default;
-      const opt: any = {
-        margin:       15,
-        filename:     `${file?.name.replace('.pdf', '') || 'document'}_翻譯.pdf`,
-        image:        { type: 'jpeg' as const, quality: 0.98 },
-        html2canvas:  { scale: 2, useCORS: true, logging: true },
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
-      };
-      
-      await html2pdf().set(opt).from(element).save();
-      setStatusMessage('');
-      showToast('PDF 下載成功！', 'success');
-    } catch (err) {
-      console.error("Failed to generate PDF:", err);
-      setStatusMessage('');
-      showToast("產生 PDF 失敗，請確定您的瀏覽器支援此功能。", 'error');
-    }
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const defaultTitle = activeTab === 'translate' 
+      ? `${file?.name.replace(/\.(pdf|md)$/i, '') || 'document'}_翻譯`
+      : (customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document');
+    a.download = `${defaultTitle}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('已下載 Markdown 檔案', 'success');
   };
 
   const handleCopyText = async () => {
-    if (!translatedText) return;
+    const textToCopy = activeTab === 'translate' ? translatedText : extractedText;
+    if (!textToCopy) return;
+    if (isIframe) {
+      showToast("在 AI Studio 預覽模式下無法複製，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      return;
+    }
+    
+    setIsCopying(true);
+    // 讓 React 有時間渲染 loading 狀態
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
     try {
       if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(translatedText);
+        await navigator.clipboard.writeText(textToCopy);
       } else {
         // Fallback for iframe environments
         const textArea = document.createElement("textarea");
-        textArea.value = translatedText;
+        textArea.value = textToCopy;
         textArea.style.position = "fixed";
         textArea.style.left = "-999999px";
         textArea.style.top = "-999999px";
@@ -378,28 +627,121 @@ export default function App() {
     } catch (err) {
       console.error("Failed to copy text:", err);
       showToast("複製失敗，請手動選取複製。", 'error');
+    } finally {
+      setIsCopying(false);
     }
   };
 
-  const downloadEpub = async (textToUse?: string) => {
-    const text = textToUse || translatedText;
-    if (!text) return;
+  const handlePdfToEpub = async () => {
+    if (!file) return;
+    if (isIframe) {
+      showToast("在 AI Studio 預覽模式下無法下載檔案，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      return;
+    }
+    
+    setIsExtracting(true);
+    setStatusMessage('正在從 PDF 提取文字...');
+    setError(null);
     
     try {
+      let fullText = '';
+      const isMd = file.name.toLowerCase().endsWith('.md');
+
+      if (isMd) {
+        setStatusMessage('正在讀取 Markdown 檔案...');
+        fullText = await file.text();
+      } else {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        const numPages = pdf.numPages;
+        
+        for (let i = 1; i <= numPages; i++) {
+          setStatusMessage(`提取文字中 (第 ${i}/${numPages} 頁)...`);
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map((item: any) => item.str).join(' ');
+          fullText += pageText + '\n\n';
+          setExtractedText(fullText);
+        }
+      }
+      
       setStatusMessage('正在產生 EPUB...');
+      const titleToUse = customTitle.trim() || file.name.replace(/\.(pdf|md)$/i, '');
+      
       const response = await fetch('/api/generate-epub', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          title: `${file?.name.replace('.pdf', '') || 'document'}_翻譯`,
+          title: titleToUse,
+          markdown: fullText,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to generate EPUB: ${response.status} ${errorText}`);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${titleToUse}.epub`;
+      document.body.appendChild(a);
+      a.click();
+      
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      }, 1000);
+      
+      showToast('EPUB 轉換並下載成功！', 'success');
+      setExtractedText(fullText);
+      
+    } catch (err: any) {
+      console.error(err);
+      setError(`轉換失敗: ${err.message}`);
+      showToast(`轉換失敗: ${err.message}`, 'error');
+    } finally {
+      setIsExtracting(false);
+      setStatusMessage('');
+    }
+  };
+
+  const downloadEpub = async (textToUse?: string) => {
+    if (isIframe) {
+      showToast("在 AI Studio 預覽模式下無法下載檔案，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      return;
+    }
+    const text = textToUse || (activeTab === 'translate' ? translatedText : extractedText);
+    if (!text) return;
+    
+    setIsDownloadingEpub(true);
+    // 讓 React 有時間渲染 loading 狀態
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    try {
+      const defaultTitle = activeTab === 'translate' 
+        ? `${file?.name.replace(/\.(pdf|md)$/i, '') || 'document'}_翻譯`
+        : (customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document');
+
+      const response = await fetch('/api/generate-epub', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: defaultTitle,
           markdown: text,
         }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to generate EPUB');
+        const errorText = await response.text();
+        console.error("EPUB generation failed:", response.status, errorText);
+        throw new Error(`Failed to generate EPUB: ${response.status} ${errorText}`);
       }
 
       const blob = await response.blob();
@@ -409,30 +751,37 @@ export default function App() {
       a.download = `${file?.name.replace('.pdf', '') || 'document'}_翻譯.epub`;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
       
-      setStatusMessage('');
+      // Delay cleanup to ensure the browser has time to start the download
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      }, 1000);
+      
       showToast('EPUB 下載成功！', 'success');
     } catch (err) {
       console.error("Failed to generate EPUB:", err);
-      setStatusMessage('');
-      showToast("產生 EPUB 失敗，請確定您的網路連線正常。", 'error');
+      showToast(`產生 EPUB 失敗，請確定您的網路連線正常。(${err instanceof Error ? err.message : String(err)})`, 'error');
+    } finally {
+      setIsDownloadingEpub(false);
     }
   };
 
   const selectedModelData = MODELS.find(m => m.id === selectedModel)!;
   
-  const estimatedOutputTokens = tokenCount ? Math.round(tokenCount * 1.05) : 0; // 預估輸出約為輸入的 1.05 倍
+  // 翻譯成繁體中文時，由於 Tokenizer 的特性，一個中文字通常會佔用 1~3 個 Token
+  // 加上輸出 Token 單價通常是輸入的 3~4 倍，因此將預估倍率從 1.05 提高到 2.5 以更貼近實際花費
+  const estimatedOutputTokens = tokenCount ? Math.round(tokenCount * 2.5) : 0; 
   const estimatedInputCost = tokenCount ? (tokenCount / 1000000) * selectedModelData.inputPrice : 0;
   const estimatedOutputCost = estimatedOutputTokens ? (estimatedOutputTokens / 1000000) * selectedModelData.outputPrice : 0;
   const totalEstimatedCost = estimatedInputCost + estimatedOutputCost;
+  const totalEstimatedCostTWD = totalEstimatedCost * 32.5; // 假設匯率 1 USD = 32.5 TWD
 
   if (isCheckingKey) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-slate-500">
-          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-slate-400">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
           <p className="text-sm font-medium">正在驗證環境...</p>
         </div>
       </div>
@@ -444,24 +793,24 @@ export default function App() {
     const isRawUrl = typeof window !== 'undefined' && !(window as any).aistudio;
 
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
-        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-md w-full text-center">
-          <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4">
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 font-sans">
+        <div className="bg-slate-900 p-8 rounded-2xl shadow-lg shadow-blue-900/10 border border-slate-800 max-w-md w-full text-center">
+          <div className="w-16 h-16 bg-blue-900/30 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
             <Key className="w-8 h-8" />
           </div>
-          <h2 className="text-2xl font-semibold mb-2">需要綁定 API Key</h2>
-          <p className="text-slate-600 mb-6 text-sm leading-relaxed">
+          <h2 className="text-2xl font-semibold mb-2 text-slate-100">需要綁定 API Key</h2>
+          <p className="text-slate-400 mb-6 text-sm leading-relaxed">
             為了保護開發者的額度，使用此翻譯工具需要您自備 Google Gemini API Key。請點擊下方按鈕綁定您的金鑰。
           </p>
           <button
             onClick={handleSelectKey}
-            className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors mb-4"
+            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 mb-4"
           >
             自動選擇或輸入 API Key
           </button>
 
-          <div className="mt-6 pt-6 border-t border-slate-100 text-left">
-            <p className="text-sm text-slate-700 mb-3 font-medium">Safari / iOS 用戶替代方案：</p>
+          <div className="mt-6 pt-6 border-t border-slate-800 text-left">
+            <p className="text-sm text-slate-300 mb-3 font-medium">Safari / iOS 用戶替代方案：</p>
             <p className="text-xs text-slate-500 mb-3">若上方按鈕沒有反應或跳出錯誤，請在此手動貼上您的 API Key：</p>
             <div className="flex flex-col gap-2">
               <input
@@ -469,7 +818,7 @@ export default function App() {
                 placeholder="AIzaSy..."
                 value={manualApiKey}
                 onChange={(e) => setManualApiKey(e.target.value)}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
               />
               <button
                 onClick={() => {
@@ -479,7 +828,7 @@ export default function App() {
                     showToast("請輸入有效的 Gemini API Key", 'error');
                   }
                 }}
-                className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-sm font-medium transition-colors"
+                className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-sm font-medium transition-colors"
               >
                 使用手動輸入的金鑰
               </button>
@@ -487,19 +836,19 @@ export default function App() {
           </div>
           
           {isRawUrl && (
-            <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-xl text-left">
-              <p className="text-sm text-amber-800 font-medium flex items-center gap-2 mb-1">
+            <div className="mt-6 p-4 bg-amber-950/30 border border-amber-900/50 rounded-xl text-left">
+              <p className="text-sm text-amber-500 font-medium flex items-center gap-2 mb-1">
                 <AlertCircle className="w-4 h-4" />
                 網址來源錯誤
               </p>
-              <p className="text-xs text-amber-700 leading-relaxed">
+              <p className="text-xs text-amber-400/80 leading-relaxed">
                 偵測到您直接訪問了 <code>.run.app</code> 網址。此環境無法載入 API Key 驗證模組。請改用原作者提供的 <strong>AI Studio 分享連結</strong> (<code>https://ai.studio/share/...</code>) 開啟本網頁。
               </p>
             </div>
           )}
           
-          <p className="text-xs text-slate-400 mt-6">
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-slate-600">
+          <p className="text-xs text-slate-500 mt-6">
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-slate-300">
               點此前往 Google AI Studio 獲取免費 API Key
             </a>
           </p>
@@ -509,167 +858,237 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
       {/* Toast Notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 ${
-          toast.type === 'success' ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-red-50 text-red-900 border border-red-200'
+        <div key={toast.id} className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 print:hidden ${
+          toast.type === 'success' ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-900/50 backdrop-blur-sm' : 'bg-red-950/80 text-red-400 border border-red-900/50 backdrop-blur-sm'
         }`}>
           {toast.type === 'success' ? (
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
           ) : (
-            <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
           )}
           <p className="text-sm font-medium leading-relaxed whitespace-pre-wrap">{toast.message}</p>
-          <button onClick={() => setToast(null)} className="ml-auto text-slate-400 hover:text-slate-600">
+          <button onClick={() => setToast(null)} className="ml-auto text-slate-500 hover:text-slate-300 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg">
-              <FileText className="w-5 h-5 text-white" />
+      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-10 print:hidden">
+        {isIframe && (
+          <div className="bg-amber-950/30 border-b border-amber-900/50 px-4 py-2.5 sm:px-6 lg:px-8 flex items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-2 text-amber-500 text-sm">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
+              <p>
+                <strong>預覽模式限制：</strong> 受限於 AI Studio 的安全機制，<strong className="font-semibold">複製與下載功能可能會失效</strong>。請在新分頁開啟以獲得完整功能。
+              </p>
             </div>
-            <h1 className="text-xl font-semibold tracking-tight">PDF 翻譯神器</h1>
+            <a 
+              href={window.location.href} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-900/50 hover:bg-amber-800/50 text-amber-400 rounded-lg text-xs font-medium transition-colors border border-amber-700/30"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              在新分頁開啟
+            </a>
           </div>
-          <div className="text-sm text-slate-500 flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-full">
+        )}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-blue-600/20 border border-blue-500/30 p-2 rounded-xl shadow-[0_0_15px_rgba(37,99,235,0.2)]">
+              <FileText className="w-5 h-5 text-blue-400" />
+            </div>
+            <h1 className="text-xl font-semibold tracking-tight text-slate-100">PDF 翻譯神器</h1>
+          </div>
+          <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner">
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
             已綁定個人 API Key
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
-          <div className="lg:col-span-4 space-y-6">
-            
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-              <h2 className="text-lg font-medium mb-4 flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-semibold text-sm">1</div>
-                選擇模型
-              </h2>
-              <div className="space-y-3">
-                {MODELS.map(model => (
-                  <label 
-                    key={model.id}
-                    className={`flex items-start p-3 rounded-xl border cursor-pointer transition-colors ${
-                      selectedModel === model.id 
-                        ? 'border-indigo-600 bg-indigo-50/50' 
-                        : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <input 
-                      type="radio" 
-                      name="model" 
-                      value={model.id}
-                      checked={selectedModel === model.id}
-                      onChange={(e) => setSelectedModel(e.target.value)}
-                      className="mt-1 text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <div className="ml-3">
-                      <div className="font-medium text-slate-900">{model.name}</div>
-                      <div className="text-xs text-slate-500 mt-0.5">
-                        輸入: ${model.inputPrice}/1M tokens<br/>
-                        輸出: ${model.outputPrice}/1M tokens
-                      </div>
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </div>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 print:p-0 print:m-0 print:max-w-none">
+        <div className="flex gap-6 mb-8 border-b border-slate-800 print:hidden">
+          <button 
+            onClick={() => setActiveTab('translate')}
+            className={`pb-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'translate' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-700'}`}
+          >
+            PDF 翻譯
+          </button>
+          <button 
+            onClick={() => setActiveTab('converter')}
+            className={`pb-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'converter' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-700'}`}
+          >
+            文件轉換器
+          </button>
+        </div>
 
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-              <h2 className="text-lg font-medium mb-4 flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-semibold text-sm">2</div>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 print:block print:gap-0">
+          
+          <div className="lg:col-span-4 space-y-6 print:hidden">
+            
+            {activeTab === 'translate' && (
+              <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+                <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
+                  <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">1</div>
+                  選擇模型
+                </h2>
+                <div className="space-y-3">
+                  {MODELS.map(model => (
+                    <label 
+                      key={model.id}
+                      className={`flex items-start p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
+                        selectedModel === model.id 
+                          ? 'border-blue-500 bg-blue-900/20 shadow-[0_0_10px_rgba(37,99,235,0.1)]' 
+                          : 'border-slate-800 hover:border-blue-500/50 hover:bg-slate-800/50'
+                      }`}
+                    >
+                      <input 
+                        type="radio" 
+                        name="model" 
+                        value={model.id}
+                        checked={selectedModel === model.id}
+                        onChange={(e) => setSelectedModel(e.target.value)}
+                        className="mt-1 text-blue-500 focus:ring-blue-500 bg-slate-950 border-slate-700"
+                      />
+                      <div className="ml-3">
+                        <div className="font-medium text-slate-200">{model.name}</div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          輸入: ${model.inputPrice}/1M tokens<br/>
+                          輸出: ${model.outputPrice}/1M tokens
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+              <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
+                <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">
+                  {activeTab === 'translate' ? '2' : '1'}
+                </div>
                 上傳 PDF
               </h2>
               
               <div 
                 onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
-                  file ? 'border-indigo-300 bg-indigo-50/30' : 'border-slate-300 hover:border-indigo-400 hover:bg-slate-50'
+                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200 ${
+                  file ? 'border-blue-500/50 bg-blue-900/10' : 'border-slate-700 hover:border-blue-500 hover:bg-slate-800/50'
                 }`}
               >
                 <input 
                   type="file" 
                   ref={fileInputRef} 
                   onChange={handleFileUpload} 
-                  accept="application/pdf" 
+                  accept="application/pdf,.md" 
                   className="hidden" 
                 />
                 
                 {file ? (
                   <div className="flex flex-col items-center">
-                    <FileText className="w-10 h-10 text-indigo-500 mb-3" />
-                    <p className="font-medium text-slate-900 truncate max-w-full px-4">{file.name}</p>
+                    <FileText className="w-10 h-10 text-blue-400 mb-3 drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]" />
+                    <p className="font-medium text-slate-200 truncate max-w-full px-4">{file.name}</p>
                     <p className="text-sm text-slate-500 mt-1">
                       {(file.size / 1024 / 1024).toFixed(2)} MB {totalPages > 0 && `· 共 ${totalPages} 頁`}
                     </p>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center">
-                    <FileUp className="w-10 h-10 text-slate-400 mb-3" />
-                    <p className="font-medium text-slate-900">點擊或拖曳上傳 PDF</p>
+                    <FileUp className="w-10 h-10 text-slate-500 mb-3" />
+                    <p className="font-medium text-slate-300">點擊或拖曳上傳 PDF</p>
                     <p className="text-sm text-slate-500 mt-1">支援最大 3600 頁的文件</p>
                   </div>
                 )}
               </div>
 
-              <div className="mt-4 flex items-center justify-between text-sm">
-                <span className="text-slate-700 font-medium">翻譯完成後自動下載：</span>
-                <select 
-                  value={autoDownload}
-                  onChange={(e) => setAutoDownload(e.target.value as any)}
-                  className="bg-slate-50 border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none"
-                >
-                  <option value="none">無</option>
-                  <option value="epub">EPUB</option>
-                  <option value="pdf">PDF</option>
-                </select>
-              </div>
+              {activeTab === 'translate' && (
+                <div className="mt-4 space-y-4">
+                  <div className="flex items-start gap-3 p-3 bg-slate-950/50 border border-slate-800 rounded-xl">
+                    <div className="flex items-center h-5 mt-0.5">
+                      <input
+                        id="split-translation"
+                        type="checkbox"
+                        checked={splitTranslation}
+                        onChange={(e) => setSplitTranslation(e.target.checked)}
+                        className="w-4 h-4 text-blue-600 bg-slate-900 border-slate-700 rounded focus:ring-blue-500 focus:ring-2"
+                      />
+                    </div>
+                    <div className="flex-1 text-sm">
+                      <label htmlFor="split-translation" className="font-medium text-slate-300 cursor-pointer block mb-1">
+                        拆分長文件 (建議)
+                      </label>
+                      <div className="text-slate-500 space-y-1 text-xs">
+                        <p><span className="text-emerald-400/80 font-medium">勾選 (拆分)：</span>適合長文件，可避免翻譯因字數過多而中斷，但段落交界處可能不夠通順。</p>
+                        <p><span className="text-amber-400/80 font-medium">不勾選 (不拆分)：</span>適合短文件，上下文連貫性最佳，但過長的文件可能因字數限制而中斷或失敗。</p>
+                      </div>
+                    </div>
+                  </div>
 
-              {file && (
-                <div className="mt-6 bg-slate-50 rounded-xl p-4 border border-slate-100">
-                  <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-1.5">
-                    <DollarSign className="w-4 h-4 text-emerald-600" />
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400 font-medium">翻譯完成後自動下載：</span>
+                    <select 
+                      value={autoDownload}
+                      onChange={(e) => setAutoDownload(e.target.value as any)}
+                      className="bg-slate-950 border border-slate-700 text-slate-300 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none"
+                    >
+                      <option value="none">無</option>
+                      <option value="md">Markdown</option>
+                      <option value="epub">EPUB</option>
+                      <option value="pdf">PDF</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'translate' && file && (
+                <div className="mt-6 bg-slate-950/50 rounded-xl p-4 border border-slate-800 shadow-inner">
+                  <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-1.5">
+                    <DollarSign className="w-4 h-4 text-emerald-500" />
                     預估資訊
                   </h3>
                   
                   {isCalculating ? (
                     <div className="flex items-center justify-center py-4 text-slate-500 text-sm gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
                       計算 Token 中...
                     </div>
                   ) : tokenCount !== null ? (
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-slate-500">輸入 Token 數:</span>
-                        <span className="font-medium">{tokenCount.toLocaleString()}</span>
+                        <span className="font-medium text-slate-300">{tokenCount.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">預估輸出 Token 數:</span>
-                        <span className="font-medium">~{estimatedOutputTokens.toLocaleString()}</span>
+                        <span className="font-medium text-slate-300">~{estimatedOutputTokens.toLocaleString()}</span>
                       </div>
-                      <div className="pt-2 mt-2 border-t border-slate-100 space-y-1">
+                      <div className="pt-2 mt-2 border-t border-slate-800 space-y-1">
                         <div className="flex justify-between">
                           <span className="text-slate-500">預估輸入成本:</span>
-                          <span>${estimatedInputCost.toFixed(4)} USD</span>
+                          <span className="text-slate-300">${estimatedInputCost.toFixed(4)} USD</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-slate-500">預估輸出成本:</span>
-                          <span>~${estimatedOutputCost.toFixed(4)} USD</span>
+                          <span className="text-slate-300">~${estimatedOutputCost.toFixed(4)} USD</span>
                         </div>
                       </div>
-                      <div className="pt-1 text-[10px] text-slate-400 italic">
+                      <div className="pt-1 text-[10px] text-slate-500 italic">
                         * 費用以每 100 萬個 Token 為單位計算。PDF 的 Token 數包含文字與格式分析。
                       </div>
-                      <div className="pt-2 mt-2 border-t border-slate-200 flex justify-between font-medium text-indigo-700">
-                        <span>總預估成本:</span>
-                        <span>~${totalEstimatedCost.toFixed(4)} USD</span>
+                      <div className="pt-3 mt-3 border-t border-slate-800 flex flex-col gap-1">
+                        <div className="flex justify-between font-medium text-blue-400">
+                          <span>總預估成本 (USD):</span>
+                          <span>~${totalEstimatedCost.toFixed(4)}</span>
+                        </div>
+                        <div className="flex justify-between font-bold text-emerald-400">
+                          <span>總預估成本 (TWD):</span>
+                          <span>~NT$ {totalEstimatedCostTWD.toFixed(2)}</span>
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -677,49 +1096,108 @@ export default function App() {
               )}
             </div>
 
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-              <h2 className="text-lg font-medium mb-4 flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-semibold text-sm">3</div>
-                開始翻譯
-              </h2>
-              
-              <button
-                onClick={handleTranslate}
-                disabled={!file || isCalculating || isTranslating}
-                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isTranslating ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    {statusMessage ? statusMessage : (totalChunks > 0 ? `翻譯中 (第 ${currentChunk}/${totalChunks} 部分)...` : '準備中...')}
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-5 h-5" />
-                    確認翻譯
-                  </>
-                )}
-              </button>
-
-              {isTranslating && totalChunks > 0 && (
-                <div className="mt-4 space-y-2">
-                  <div className="flex justify-between text-xs font-medium text-slate-500">
-                    <span>進度: {Math.round((currentChunk / totalChunks) * 100)}%</span>
-                    {estimatedRemainingTime !== null && estimatedRemainingTime > 0 && (
-                      <span>預計剩餘: {Math.floor(estimatedRemainingTime / 60)} 分 {estimatedRemainingTime % 60} 秒</span>
-                    )}
-                  </div>
-                  <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                    <div 
-                      className="bg-indigo-600 h-full transition-all duration-500 ease-out"
-                      style={{ width: `${(currentChunk / totalChunks) * 100}%` }}
+            {activeTab === 'converter' && (
+              <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+                <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
+                  <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">2</div>
+                  設定 EPUB
+                </h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">自訂書名 (選填)</label>
+                    <input 
+                      type="text" 
+                      value={customTitle}
+                      onChange={(e) => setCustomTitle(e.target.value)}
+                      placeholder={file ? file.name.replace('.pdf', '') : '未命名文件'}
+                      className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                     />
                   </div>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+              <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
+                <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">3</div>
+                {activeTab === 'translate' ? '開始翻譯' : '開始轉換'}
+              </h2>
+              
+              {activeTab === 'translate' ? (
+                <button
+                  onClick={handleTranslate}
+                  disabled={!file || isCalculating || isTranslating || isExtracting}
+                  className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
+                >
+                  {isTranslating ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                      <span className="text-white">{statusMessage ? statusMessage : (totalChunks > 0 ? `翻譯中 (第 ${currentChunk}/${totalChunks} 部分)...` : '準備中...')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-5 h-5" />
+                      確認翻譯
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  onClick={handlePdfToEpub}
+                  disabled={!file || isExtracting || isTranslating}
+                  className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
+                >
+                  {isExtracting ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                      <span className="text-white">{statusMessage || '轉換中...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Book className="w-5 h-5" />
+                      轉換並下載 EPUB
+                    </>
+                  )}
+                </button>
+              )}
+
+              {activeTab === 'translate' && isTranslating && totalChunks > 0 && (
+                <div className="mt-6 space-y-3">
+                  <div className="flex justify-between text-sm font-semibold text-slate-400">
+                    <span>
+                      {translationStage === 'extracting' ? `提取文字進度: ${Math.round((currentChunk / totalChunks) * 100)}%` : 
+                       translationStage === 'analyzing' ? '正在分析文本...' : 
+                       `翻譯進度: ${Math.round((currentChunk / totalChunks) * 100)}%`}
+                    </span>
+                    {estimatedRemainingTime !== null && translationStage === 'translating' && (
+                      <span className="text-blue-400">
+                        預計剩餘: {Math.floor(estimatedRemainingTime / 60)} 分 {estimatedRemainingTime % 60} 秒
+                      </span>
+                    )}
+                  </div>
+                  <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden shadow-inner border border-slate-800">
+                    <div 
+                      className="bg-blue-500 h-full transition-all duration-500 ease-out relative shadow-[0_0_10px_rgba(59,130,246,0.8)]"
+                      style={{ width: `${(currentChunk / totalChunks) * 100}%` }}
+                    >
+                      <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
+                    </div>
+                  </div>
+                  
+                  {translationStyle && (
+                    <div className="mt-4 p-3 bg-indigo-950/30 border border-indigo-900/50 text-indigo-300 rounded-lg text-sm flex items-start gap-2">
+                      <FileText className="w-5 h-5 shrink-0 mt-0.5 text-indigo-400" />
+                      <div>
+                        <span className="font-semibold text-indigo-200">AI 偵測翻譯風格：</span>
+                        {translationStyle}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               
               {error && (
-                <div className="mt-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm flex items-start gap-2">
+                <div className="mt-4 p-3 bg-red-950/30 border border-red-900/50 text-red-400 rounded-lg text-sm flex items-start gap-2">
                   <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                   <p>{error}</p>
                 </div>
@@ -728,52 +1206,78 @@ export default function App() {
 
           </div>
 
-          <div className="lg:col-span-8">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 h-full min-h-[600px] flex flex-col overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
-                <h2 className="text-lg font-medium flex items-center gap-2">
-                  翻譯結果
+          <div className="lg:col-span-8 print:block print:w-full">
+            <div className="bg-slate-900 rounded-2xl shadow-lg shadow-black/20 border border-slate-800 h-full min-h-[600px] flex flex-col overflow-hidden print:border-none print:shadow-none print:h-auto print:min-h-0 print:rounded-none print:block">
+              <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50 print:hidden">
+                <h2 className="text-lg font-medium flex items-center gap-2 text-slate-200">
+                  {activeTab === 'translate' ? '翻譯結果' : '提取文字預覽'}
                 </h2>
                 
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleCopyText}
-                    disabled={!translatedText}
-                    className="py-2 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isCopying}
+                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                   >
-                    <Copy className="w-4 h-4" />
+                    {isCopying ? <Loader2 className="w-4 h-4 animate-spin text-blue-400" /> : <Copy className="w-4 h-4" />}
                     複製全文
                   </button>
                   <button
                     onClick={() => downloadEpub()}
-                    disabled={!translatedText || isTranslating}
-                    className="py-2 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isTranslating || isDownloadingEpub || isExtracting}
+                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                   >
-                    <Book className="w-4 h-4" />
+                    {isDownloadingEpub ? <Loader2 className="w-4 h-4 animate-spin text-blue-400" /> : <Book className="w-4 h-4" />}
                     下載 EPUB
                   </button>
                   <button
-                    onClick={downloadPdf}
-                    disabled={!translatedText || isTranslating}
-                    className="py-2 px-4 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    onClick={handleDownloadMarkdown}
+                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isTranslating}
+                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                   >
-                    <Download className="w-4 h-4" />
+                    <FileText className="w-4 h-4" />
+                    下載 MD
+                  </button>
+                  <button
+                    onClick={downloadPdf}
+                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isTranslating || isDownloadingPdf}
+                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                  >
+                    {isDownloadingPdf ? <Loader2 className="w-4 h-4 animate-spin text-blue-400" /> : <Download className="w-4 h-4" />}
                     下載 PDF
                   </button>
                 </div>
               </div>
               
-              <div className="flex-1 p-6 overflow-auto bg-white">
-                {!translatedText && !isTranslating ? (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
-                    <FileText className="w-16 h-16 opacity-20" />
-                    <p>翻譯結果將顯示於此</p>
+              <div className="flex-1 p-6 overflow-auto bg-slate-900 print:overflow-visible print:p-0">
+                {(activeTab === 'translate' ? !translatedText : !extractedText) && !isTranslating && !isExtracting ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4">
+                    {activeTab === 'translate' ? (
+                      <>
+                        <FileText className="w-16 h-16 opacity-20" />
+                        <p>翻譯結果將顯示於此</p>
+                      </>
+                    ) : (
+                      <>
+                        <Book className="w-16 h-16 opacity-20" />
+                        <p>上傳檔案並點擊「轉換並下載 EPUB」按鈕</p>
+                        <p className="text-sm text-slate-500">轉換完成後將自動下載 EPUB 檔案，並在此預覽提取的文字</p>
+                      </>
+                    )}
+                  </div>
+                ) : isExtracting && !extractedText ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4">
+                    <Loader2 className="w-16 h-16 animate-spin text-blue-500 opacity-80" />
+                    <p className="text-slate-400">{statusMessage || '正在處理您的文件...'}</p>
                   </div>
                 ) : (
-                  <div id="translation-result-content" className="prose prose-slate max-w-none prose-headings:font-semibold prose-a:text-indigo-600">
-                    <ReactMarkdown>{translatedText}</ReactMarkdown>
-                    {isTranslating && (
-                      <span className="inline-block w-2 h-4 ml-1 bg-indigo-500 animate-pulse"></span>
+                  <div id="translation-result-content" className="prose prose-invert max-w-none prose-headings:font-semibold prose-a:text-blue-400">
+                    <ReactMarkdown>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
+                    {(isTranslating || isExtracting) && (
+                      <div className="mt-4 flex items-center text-slate-400 text-sm">
+                        <Loader2 className="w-4 h-4 animate-spin mr-2 text-blue-500" />
+                        {statusMessage || '處理中...'}
+                      </div>
                     )}
                   </div>
                 )}

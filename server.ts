@@ -3,7 +3,8 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import epub from 'epub-gen-memory';
+import epubModule from 'epub-gen-memory';
+const epub = (epubModule as any).default || epubModule;
 import { marked } from 'marked';
 
 dotenv.config();
@@ -29,10 +30,20 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing markdown content' });
       }
 
-      const htmlContent = await marked.parse(markdown);
+      let htmlContent = await marked.parse(markdown);
+      
+      // Remove all img, picture, and svg tags because epub-gen-memory fails with non-absolute/base64 URLs
+      htmlContent = htmlContent.replace(/<img[^>]*>/g, '');
+      htmlContent = htmlContent.replace(/<picture[^>]*>[\s\S]*?<\/picture>/gi, '');
+      htmlContent = htmlContent.replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, '');
       
       const epubBuffer = await epub(
-        { title: title || 'Translated Document', author: 'AI Translator' },
+        { 
+          title: title || 'Translated Document', 
+          author: 'AI Translator',
+          date: new Date().toISOString().split('.')[0] + 'Z',
+          lang: 'zh-TW'
+        },
         [{ title: 'Content', content: htmlContent }]
       );
 
