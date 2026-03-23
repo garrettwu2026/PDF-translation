@@ -327,11 +327,12 @@ export default function App() {
       } else {
         const arrayBuffer = await file.arrayBuffer();
         const pdfDoc = await PDFDocument.load(arrayBuffer);
+        const pdfjsDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
         const pageCount = pdfDoc.getPageCount();
         
         // --- STAGE 1: EXTRACTION ---
         setStatusMessage('正在從 PDF 提取文字...');
-        const EXTRACTION_CHUNK_SIZE = 10; // Extract 10 pages at a time
+        const EXTRACTION_CHUNK_SIZE = 5; // Extract 5 pages at a time
         const extractionChunks = Math.ceil(pageCount / EXTRACTION_CHUNK_SIZE);
         setTotalChunks(extractionChunks);
         
@@ -350,19 +351,46 @@ export default function App() {
           const chunkBytes = await chunkPdf.save();
           const chunkBase64 = uint8ArrayToBase64(chunkBytes);
           
+          // Extract raw text for validation and primary source
+          let chunkRawText = '';
+          try {
+            for (let p = startPage + 1; p <= endPage + 1; p++) {
+              const page = await pdfjsDoc.getPage(p);
+              const textContent = await page.getTextContent();
+              chunkRawText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+            }
+          } catch (e) {
+            console.warn("Failed to extract raw text", e);
+          }
+          const rawTextLength = chunkRawText.replace(/\s+/g, '').length;
+          const hasRawText = rawTextLength > 50;
+          
           let success = false;
           let retries = 0;
           const MAX_RETRIES = 3;
           
           while (!success && retries < MAX_RETRIES) {
             try {
+              const parts: any[] = [];
+              let systemInstruction = "";
+              
+              if (hasRawText) {
+                // Use raw text and ask LLM to format it
+                systemInstruction = "You are a precise text formatting tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, and preserve ALL original text exactly. DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
+                parts.push({ text: `你是一個專業的排版助手。以下是從 PDF 底層直接提取出來的純文字。請幫我將這些文字重新排版成乾淨的 Markdown 格式（修復不正常的斷行、還原標題層級等）。\n\n【重要規則】：\n1. **絕對不要翻譯**：保持原始語言。\n2. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n3. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。\n\n原始文字：\n${chunkRawText}` });
+              } else {
+                // Fallback to Vision OCR for scanned PDFs
+                systemInstruction = "You are a precise OCR and text extraction tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as Markdown. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content, and DO NOT hallucinate or generate content that is not present in the images. If you see a Table of Contents, ONLY transcribe the Table of Contents, DO NOT generate the chapters themselves.";
+                parts.push({ inlineData: { data: chunkBase64, mimeType: 'application/pdf' } });
+                parts.push({ text: '你是一個精準的 OCR 與文字提取工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字逐句」完整提取出來，並轉換為乾淨的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字，無論是英文、中文或其他語言，都請保持原樣。\n2. **絕對不要遺漏任何內容**：包含封面文字、版權宣告、目錄 (Table of Contents)、前言、章節標題與所有內文，都必須完整提取。\n3. **絕對不要自行腦補或擴寫**：如果遇到目錄，請只輸出目錄的文字，絕對不要根據目錄的標題去生成或猜測後續的內文。\n4. **絕對不要總結或縮減**：請保留所有原始文字。\n5. **保留原始格式**：請保留原始的標題層級（使用 #, ## 等）、列表和段落格式。\n6. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋（例如「好的，這是提取的文字...」）。' });
+              }
+
               const responseStream = await ai.models.generateContentStream({
                 model: selectedModel,
-                contents: {
-                  parts: [
-                    { inlineData: { data: chunkBase64, mimeType: 'application/pdf' } },
-                    { text: '請將這份 PDF 文件的內容提取出來，並轉換為乾淨的 Markdown 格式。保留標題、列表和基本的格式。直接輸出 Markdown，不要有任何解釋。' }
-                  ]
+                contents: { parts },
+                config: {
+                  systemInstruction,
+                  temperature: 0.1,
                 }
               });
               
@@ -372,11 +400,22 @@ export default function App() {
                 chunkExtractedText += text;
                 setExtractedText(fullMarkdown + chunkExtractedText);
               }
+              
+              // Validation Mechanism (only strict if using Vision OCR, as formatting raw text is safer)
+              if (!hasRawText && rawTextLength > 50) {
+                const extractedLength = chunkExtractedText.replace(/\s+/g, '').length;
+                if (extractedLength > rawTextLength * 3 || extractedLength < rawTextLength * 0.2) {
+                  console.warn(`Validation failed for chunk ${i + 1}. Raw length: ${rawTextLength}, Extracted length: ${extractedLength}. Retrying...`);
+                  throw new Error(`Extracted text length (${extractedLength}) deviates significantly from original PDF text (${rawTextLength}). Possible hallucination or omission.`);
+                }
+              }
+              
               fullMarkdown += chunkExtractedText + '\n\n';
               setExtractedText(fullMarkdown);
               success = true;
             } catch (err: any) {
               retries++;
+              setStatusMessage(`提取文字異常，正在重新嘗試 (第 ${i + 1}/${extractionChunks} 部分) - 重試次數: ${retries}`);
               if (retries >= MAX_RETRIES) throw err;
               await new Promise(resolve => setTimeout(resolve, 2000 * retries));
             }
@@ -444,12 +483,18 @@ export default function App() {
         const MAX_RETRIES = 6;
         let currentChunkTranslated = '';
 
-        const promptText = `請將以下 Markdown 內容翻譯成繁體中文 (Traditional Chinese)。請保持原始的 Markdown 格式、標題、列表和連結。直接輸出翻譯內容，不要加上任何多餘的解釋或開場白。
+        const promptText = `你是一個專業的翻譯與校對工具。你的任務是將以下 Markdown 格式的文本翻譯成繁體中文。
 
-【翻譯風格要求】
-請使用「${detectedStyle}」進行翻譯。
+【翻譯風格要求】：${detectedStyle}
+${glossaryText !== '無' ? `【參考詞彙表 (Glossary) - 請確保譯名一致】：\n${glossaryText}\n\n` : ''}${previousTranslatedText ? `【上一段的譯文參考 (請確保上下文銜接自然)】：\n${previousTranslatedText}\n\n` : ''}
+【嚴格規則】：
+1. **絕對忠於原文**：請逐句翻譯，**嚴禁遺漏任何句子、段落或標題**。
+2. **嚴禁總結或刪減**：即使內容重複或看似不重要，也必須完整翻譯。
+3. **保留 Markdown 格式**：所有的標題 (#)、列表 (-)、粗體 (**) 等語法必須原封不動地保留。
+4. **術語一致性**：請務必遵守提供的專業術語對照表。
+5. **直接輸出譯文**：不要有任何開頭或結尾的解釋。
 
-${glossaryText !== '無' ? `【參考詞彙表 (Glossary) - 請確保譯名一致】\n${glossaryText}\n\n` : ''}${previousTranslatedText ? `【上一段的譯文參考 (請確保上下文銜接自然)】\n${previousTranslatedText}\n\n` : ''}【需要翻譯的內容】
+【需要翻譯的內容】：
 ${textChunks[i]}`;
 
         while (!success && retries < MAX_RETRIES) {
@@ -460,6 +505,10 @@ ${textChunks[i]}`;
                 parts: [
                   { text: promptText }
                 ]
+              },
+              config: {
+                systemInstruction: "You are a highly accurate translator. Your goal is to translate the provided text into Traditional Chinese with 100% fidelity. DO NOT skip any sentences, DO NOT summarize, and DO NOT add any information that is not in the source text. Maintain all Markdown formatting exactly.",
+                temperature: 0.2,
               }
             });
             
@@ -468,6 +517,17 @@ ${textChunks[i]}`;
               currentChunkTranslated += text;
               setTranslatedText(fullTranslatedText + currentChunkTranslated);
             }
+
+            // Basic validation for translation: check if output is suspiciously short
+            const sourceLength = textChunks[i].replace(/\s+/g, '').length;
+            const targetLength = currentChunkTranslated.replace(/\s+/g, '').length;
+            
+            // For English to Chinese, the character count usually decreases, but shouldn't be less than 20% of source
+            if (sourceLength > 100 && targetLength < sourceLength * 0.15) {
+              console.warn(`Translation validation failed for chunk ${i + 1}. Source length: ${sourceLength}, Target length: ${targetLength}. Retrying...`);
+              throw new Error("Translated text is suspiciously short. Possible omission.");
+            }
+
             success = true;
           } catch (err: any) {
             const errorMessage = err.message?.toLowerCase() || '';
