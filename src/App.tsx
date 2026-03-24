@@ -572,8 +572,9 @@ ${textChunks[i]}`;
             const sourceLength = textChunks[i].replace(/\s+/g, '').length;
             const targetLength = currentChunkTranslated.replace(/\s+/g, '').length;
             
-            // For English to Chinese, the character count usually decreases, but shouldn't be less than 20% of source
-            if (sourceLength > 100 && targetLength < sourceLength * 0.15) {
+            // For English to Chinese, the character count usually decreases, but shouldn't be less than 10% of source
+            // 15% was sometimes too strict for documents with many numbers or code blocks.
+            if (sourceLength > 100 && targetLength < sourceLength * 0.1) {
               console.warn(`Translation validation failed for chunk ${i + 1}. Source length: ${sourceLength}, Target length: ${targetLength}. Retrying...`);
               throw new Error("Translated text is suspiciously short. Possible omission.");
             }
@@ -583,11 +584,14 @@ ${textChunks[i]}`;
             const errorMessage = err.message?.toLowerCase() || '';
             const status = err.status;
             
-            if (status === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('rate limit')) {
+            if (status === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('rate limit') || errorMessage.includes('suspiciously short')) {
               retries++;
-              if (retries >= MAX_RETRIES) throw new Error(`API 頻率限制過嚴，請稍後再試。(${err.message})`);
-              const waitTime = retries * 10;
-              setStatusMessage(`API 限制，等待 ${waitTime} 秒後重試...`);
+              if (retries >= MAX_RETRIES) throw new Error(`翻譯失敗：模型輸出內容過短或達到 API 限制。(${err.message})`);
+              
+              const isShortError = errorMessage.includes('suspiciously short');
+              const waitTime = isShortError ? 1 : retries * 5;
+              
+              setStatusMessage(isShortError ? `譯文長度異常，正在重新嘗試 (${retries}/${MAX_RETRIES})...` : `API 限制，等待 ${waitTime} 秒後重試...`);
               await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
               setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
               currentChunkTranslated = '';
