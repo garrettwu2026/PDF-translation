@@ -21,7 +21,7 @@ const uint8ArrayToBase64 = (bytes: Uint8Array) => {
 
 const MODELS = [
   { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (最強品質)', inputPrice: 1.25, outputPrice: 5.00 },
-  { id: 'gemini-3.1-flash-preview', name: 'Gemini 3.1 Flash (推薦)', inputPrice: 0.075, outputPrice: 0.30 },
+  { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash (推薦)', inputPrice: 0.075, outputPrice: 0.30 },
   { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite (極速)', inputPrice: 0.0375, outputPrice: 0.15 },
 ];
 
@@ -88,14 +88,14 @@ export default function App() {
   const [customTitle, setCustomTitle] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedText, setExtractedText] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-3.1-flash-preview');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.1-flash-lite-preview');
   const [splitTranslation, setSplitTranslation] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
-  const [translationStage, setTranslationStage] = useState<'extracting' | 'repairing' | 'analyzing' | 'translating' | null>(null);
+  const [translationStage, setTranslationStage] = useState<'extracting' | 'analyzing' | 'translating' | null>(null);
   const [glossary, setGlossary] = useState<string>('');
   const [currentChunk, setCurrentChunk] = useState(0);
   const [totalChunks, setTotalChunks] = useState(0);
@@ -307,12 +307,12 @@ export default function App() {
         }
       }
       
-      // Multiply by 6 to roughly estimate the multi-stage process:
+      // Multiply by 100 to roughly estimate the multi-stage process:
       // 1. PDF -> Markdown (1x)
       // 2. Markdown -> Glossary (~0.5x)
       // 3. Markdown + Glossary + Context -> Translation (~0.8x)
-      // 4. Extra buffer as requested (6x total)
-      setTokenCount(Math.round(totalTokens * 6));
+      // 4. Extra buffer as requested (100x total)
+      setTokenCount(Math.round(totalTokens * 100));
     } catch (err: any) {
       console.error(err);
       setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
@@ -357,23 +357,28 @@ export default function App() {
         const EXTRACTION_CHUNK_SIZE = 5; // Extract 5 pages at a time
         const extractionChunks = Math.ceil(pageCount / EXTRACTION_CHUNK_SIZE);
         setTotalChunks(extractionChunks);
-        
-        for (let i = 0; i < extractionChunks; i++) {
-          setCurrentChunk(i + 1);
-          setStatusMessage(`正在提取文字 (第 ${i + 1}/${extractionChunks} 部分)...`);
-          
-          const chunkPdf = await PDFDocument.create();
+
+        // Parallel extraction to improve efficiency
+        const results = new Array(extractionChunks);
+        let completedExtractions = 0;
+        const CONCURRENCY_LIMIT = 3;
+
+        const processExtractionChunk = async (i: number) => {
+          let success = false;
+          let retries = 0;
+          const MAX_RETRIES = 3;
+
           const startPage = i * EXTRACTION_CHUNK_SIZE;
           const endPage = Math.min(startPage + EXTRACTION_CHUNK_SIZE, pageCount) - 1;
           const pageIndices = Array.from({length: endPage - startPage + 1}, (_, idx) => startPage + idx);
           
+          const chunkPdf = await PDFDocument.create();
           const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
           copiedPages.forEach(page => chunkPdf.addPage(page));
           
           const chunkBytes = await chunkPdf.save();
           const chunkBase64 = uint8ArrayToBase64(chunkBytes);
           
-          // Extract raw text for validation and primary source
           let chunkRawText = '';
           try {
             for (let p = startPage + 1; p <= endPage + 1; p++) {
@@ -386,36 +391,22 @@ export default function App() {
           }
           const rawTextLength = chunkRawText.replace(/\s+/g, '').length;
           const hasRawText = rawTextLength > 50;
-          
-          let success = false;
-          let retries = 0;
-          const MAX_RETRIES = 3;
-          
+
           while (!success && retries < MAX_RETRIES) {
             try {
               const parts: any[] = [];
               let systemInstruction = "";
               
               if (hasRawText) {
-                // Use raw text and ask LLM to format it
-                systemInstruction = "You are a precise text formatting tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
-                parts.push({ text: `你是一個專業的排版助手。以下是從 PDF 底層直接提取出來的純文字。請幫我將這些文字重新排版成乾淨的 Markdown 格式（修復不正常的斷行、還原標題層級等）。
-
-【特別注意】：
-1. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起導致拼字錯誤。
-2. **絕對不要翻譯**：保持原始語言。
-3. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。
-
-原始文字：
-${chunkRawText}` });
+                systemInstruction = "You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
+                parts.push({ text: `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n3. **絕對不要翻譯**：保持原始語言。\n4. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${chunkRawText}` });
               } else {
-                // Fallback to Vision OCR for scanned PDFs
-                systemInstruction = "You are a precise OCR and text extraction tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as Markdown. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
+                systemInstruction = "You are a precise OCR, text extraction, and repair tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
                 parts.push({ inlineData: { data: chunkBase64, mimeType: 'application/pdf' } });
-                parts.push({ text: '你是一個精準的 OCR 與文字提取工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字逐句」完整提取出來，並轉換為乾淨的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **識別上標註解**：請特別注意字尾的小數字（上標），這些通常是引用或註解。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔，不要混淆為單字的一部分。\n2. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n3. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n4. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
+                parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字逐句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n3. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n4. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n5. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
               }
 
-              const responseStream = await ai.models.generateContentStream({
+              const response = await ai.models.generateContent({
                 model: selectedModel,
                 contents: { parts },
                 config: {
@@ -424,73 +415,37 @@ ${chunkRawText}` });
                 }
               });
               
-              let chunkExtractedText = '';
-              for await (const chunk of responseStream) {
-                const text = chunk.text || '';
-                chunkExtractedText += text;
-                setExtractedText(fullMarkdown + chunkExtractedText);
-              }
+              const chunkExtractedText = response.text || '';
+              results[i] = chunkExtractedText;
+              completedExtractions++;
+              setCurrentChunk(completedExtractions);
+              setStatusMessage(`正在提取文字 (已完成 ${completedExtractions}/${extractionChunks} 部分)...`);
               
-              // Validation Mechanism (only strict if using Vision OCR, as formatting raw text is safer)
-              if (!hasRawText && rawTextLength > 50) {
-                const extractedLength = chunkExtractedText.replace(/\s+/g, '').length;
-                if (extractedLength > rawTextLength * 3 || extractedLength < rawTextLength * 0.2) {
-                  console.warn(`Validation failed for chunk ${i + 1}. Raw length: ${rawTextLength}, Extracted length: ${extractedLength}. Retrying...`);
-                  throw new Error(`Extracted text length (${extractedLength}) deviates significantly from original PDF text (${rawTextLength}). Possible hallucination or omission.`);
-                }
-              }
+              // Update preview with what we have so far (sorted)
+              setExtractedText(results.filter(r => r !== undefined).join('\n\n'));
               
-              fullMarkdown += chunkExtractedText + '\n\n';
-              setExtractedText(fullMarkdown);
               success = true;
             } catch (err: any) {
               retries++;
-              setStatusMessage(`提取文字異常，正在重新嘗試 (第 ${i + 1}/${extractionChunks} 部分) - 重試次數: ${retries}`);
               if (retries >= MAX_RETRIES) throw err;
               await new Promise(resolve => setTimeout(resolve, 2000 * retries));
             }
           }
-        }
-      }
-      
-      // --- STAGE 1.2: SOURCE TEXT REPAIR ---
-      setTranslationStage('repairing');
-      setStatusMessage('正在優化原始文本結構與修復斷句...');
-      
-      // Split for repair if text is very long to avoid context limits
-      const repairChunks = splitTextIntoChunks(fullMarkdown, 8000);
-      let repairedMarkdown = '';
-      
-      for (let i = 0; i < repairChunks.length; i++) {
-        setStatusMessage(`正在優化文本結構 (第 ${i + 1}/${repairChunks.length} 部分)...`);
-        try {
-          const repairResponse = await ai.models.generateContent({
-            model: selectedModel,
-            contents: {
-              parts: [
-                { text: `你是一個專業的文本修復助手。以下是從 PDF 提取出的 Markdown 文本，可能存在不正常的斷句、多餘的空格或格式混亂。請在不改變任何原意的前提下，修復這些結構問題，確保句子完整且邏輯連貫。
+        };
 
-【嚴格規則】：
-1. **絕對不要翻譯**：保持原始語言。
-2. **絕對不要刪減或總結**：必須 100% 保留所有原始資訊。
-3. **確保內容正確**：不要添加任何原文中沒有的資訊。
-4. **直接輸出修復後的 Markdown**：不要有任何解釋。
-
-待修復文本：
-${repairChunks[i]}` }
-              ]
-            },
-            config: { temperature: 0.1 }
-          });
-          repairedMarkdown += (repairResponse.text || repairChunks[i]) + '\n\n';
-          setExtractedText(repairedMarkdown);
-        } catch (err) {
-          console.warn("Repair failed for chunk, using original", err);
-          repairedMarkdown += repairChunks[i] + '\n\n';
-        }
+        // Run with concurrency limit
+        const queue = [...Array(extractionChunks).keys()];
+        const workers = Array(Math.min(CONCURRENCY_LIMIT, extractionChunks)).fill(null).map(async () => {
+          while (queue.length > 0) {
+            const i = queue.shift()!;
+            await processExtractionChunk(i);
+          }
+        });
+        
+        await Promise.all(workers);
+        fullMarkdown = results.join('\n\n').trim();
+        setExtractedText(fullMarkdown);
       }
-      fullMarkdown = repairedMarkdown.trim();
-      setExtractedText(fullMarkdown);
 
       // --- STAGE 1.5: GLOSSARY GENERATION & STYLE ANALYSIS ---
       setTranslationStage('analyzing');
@@ -655,7 +610,8 @@ ${textChunks[i]}`;
         setEstimatedRemainingTime(Math.round((avg * remaining) / 1000));
         
         if (i < translationChunksCount - 1) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // Reduced delay for better efficiency
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
       
@@ -1414,7 +1370,6 @@ ${textChunks[i]}`;
                   <div className="flex justify-between text-sm font-semibold text-slate-400">
                     <span>
                       {translationStage === 'extracting' ? `提取文字進度: ${Math.round((currentChunk / totalChunks) * 100)}%` : 
-                       translationStage === 'repairing' ? '正在優化原始文本結構...' :
                        translationStage === 'analyzing' ? '正在分析文本風格...' : 
                        `翻譯進度: ${Math.round((currentChunk / totalChunks) * 100)}%`}
                     </span>
@@ -1521,7 +1476,7 @@ ${textChunks[i]}`;
                   </div>
                 ) : (
                   <div id="translation-result-content" className="prose prose-invert max-w-none prose-headings:font-semibold prose-a:text-blue-400">
-                    <ReactMarkdown>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'repairing' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
+                    <ReactMarkdown>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
                     {(isTranslating || isExtracting) && (
                       <div className="mt-4 flex items-center text-slate-400 text-sm">
                         <Loader2 className="w-4 h-4 animate-spin mr-2 text-blue-500" />
