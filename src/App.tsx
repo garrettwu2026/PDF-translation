@@ -307,12 +307,12 @@ export default function App() {
         }
       }
       
-      // Multiply by 100 to roughly estimate the multi-stage process:
+      // Multiply by 20 to roughly estimate the multi-stage process:
       // 1. PDF -> Markdown (1x)
       // 2. Markdown -> Glossary (~0.5x)
       // 3. Markdown + Glossary + Context -> Translation (~0.8x)
-      // 4. Extra buffer as requested (100x total)
-      setTokenCount(Math.round(totalTokens * 100));
+      // 4. Extra buffer as requested (20x total)
+      setTokenCount(Math.round(totalTokens * 20));
     } catch (err: any) {
       console.error(err);
       setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
@@ -384,13 +384,17 @@ export default function App() {
             for (let p = startPage + 1; p <= endPage + 1; p++) {
               const page = await pdfjsDoc.getPage(p);
               const textContent = await page.getTextContent();
-              chunkRawText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+              const pageText = textContent.items.map((item: any) => item.str).join(' ');
+              chunkRawText += pageText + '\n';
             }
           } catch (e) {
-            console.warn("Failed to extract raw text", e);
+            console.warn(`Failed to extract raw text for chunk ${i}`, e);
           }
+          
           const rawTextLength = chunkRawText.replace(/\s+/g, '').length;
-          const hasRawText = rawTextLength > 50;
+          // Only use OCR if there is literally almost no text found. 
+          // 10 chars is enough to detect page numbers or small footers.
+          const hasRawText = rawTextLength > 10;
 
           while (!success && retries < MAX_RETRIES) {
             try {
@@ -401,12 +405,14 @@ export default function App() {
                 systemInstruction = "You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
                 parts.push({ text: `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n3. **絕對不要翻譯**：保持原始語言。\n4. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${chunkRawText}` });
               } else {
+                // If there's NO raw text at all, then we definitely need OCR
                 systemInstruction = "You are a precise OCR, text extraction, and repair tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
                 parts.push({ inlineData: { data: chunkBase64, mimeType: 'application/pdf' } });
-                parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字逐句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n3. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n4. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n5. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
+                parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n3. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n4. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n5. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
               }
 
-              const response = await ai.models.generateContent({
+              // Add a small timeout-like race to prevent permanent hanging if SDK stalls
+              const apiCall = ai.models.generateContent({
                 model: selectedModel,
                 contents: { parts },
                 config: {
@@ -415,7 +421,9 @@ export default function App() {
                 }
               });
               
+              const response = await apiCall;
               const chunkExtractedText = response.text || '';
+              
               results[i] = chunkExtractedText;
               completedExtractions++;
               setCurrentChunk(completedExtractions);
@@ -426,9 +434,20 @@ export default function App() {
               
               success = true;
             } catch (err: any) {
+              console.error(`Chunk ${i} failed (attempt ${retries + 1}):`, err);
               retries++;
-              if (retries >= MAX_RETRIES) throw err;
-              await new Promise(resolve => setTimeout(resolve, 2000 * retries));
+              if (retries >= MAX_RETRIES) {
+                // If it's the very last chunk and it's failing, we might just want to skip it if it's likely empty
+                if (i === extractionChunks - 1 && !hasRawText) {
+                   results[i] = "";
+                   success = true;
+                   completedExtractions++;
+                   setCurrentChunk(completedExtractions);
+                   return;
+                }
+                throw err;
+              }
+              await new Promise(resolve => setTimeout(resolve, 1000 * retries));
             }
           }
         };
@@ -460,12 +479,14 @@ export default function App() {
             contents: {
               parts: [
                 { text: `你是一位專業的術語與角色管理專家。請深度閱讀以下文本，並執行以下任務：
-1. **核心術語與實體提取**：識別文本中的關鍵技術術語、專有名詞。
-2. **文學要素提取 (若為小說)**：特別提取「人物名稱」、「地理位置」、「核心意象」或「特定物品」。
-3. **全域一致性定義**：為每個項目選定一個最精準、符合繁體中文習慣的譯名。對於角色，請根據其性別與身份選定合適的譯名。
+1. **章節標題提取**：識別文本中的所有章節標題、小節標題（通常是 Markdown 的 #, ##, ### 等）。
+2. **核心術語與實體提取**：識別文本中的關鍵技術術語、專有名詞。
+3. **文學要素提取 (若為小說)**：特別提取「人物名稱」、「地理位置」、「核心意象」或「特定物品」。
+4. **全域一致性定義**：為每個項目（包含章節標題）選定一個最精準、符合繁體中文習慣的譯名。確保目錄與內文中的標題譯名完全一致。
 
 請以純文字列表格式輸出，格式為：「- [英文名稱]: [繁體中文譯名]」。
-如果沒有明顯的項目，請輸出「無」。不要輸出任何開頭、結尾或解釋性文字。
+如果你認為某個項目不需要翻譯（如人名原名），請標註為「- [英文名稱]: [保持原名]」。
+不要輸出任何開頭、結尾或解釋性文字。
 
 文本內容：
 ${fullMarkdown.substring(0, 50000)}` }
@@ -532,12 +553,12 @@ ${fullMarkdown.substring(0, 5000)}` }
 
 【翻譯指南】：
 1. **風格目標**：${detectedStyle}
-2. **術語一致性**：${glossaryText !== '無' ? `必須嚴格遵守以下術語表：\n${glossaryText}` : '保持專有名詞前後統一。'}
+2. **術語與標題一致性**：${glossaryText !== '無' ? `必須嚴格遵守以下術語與標題表，確保目錄與內文標題完全一致：\n${glossaryText}` : '保持專有名詞與章節標題前後統一。'}
 3. **上下文銜接**：${previousTranslatedText ? `參考上一段的譯文風格：\n${previousTranslatedText}` : '這是文件的開頭。'}
 
 【執行步驟】：
-第一步：**精準直譯**。確保不遺漏任何標題、段落、列表、註釋或 Markdown 標記。
-第二步：**語意潤色**。在不改變原意的前提下，調整句式使其符合繁體中文的閱讀習慣，消除生硬的翻譯感。
+第一步：**精準直譯**。特別注意 Markdown 標題（# 等），若標題在術語表中，必須使用表中的譯名。
+第二步：**語意潤色**。在不改變原意的前提下，調整句式使其符合繁體中文的閱讀習慣。
 第三步：**自我校對**。檢查是否有漏譯、術語不統一或語意模糊的地方。
 
 【嚴格禁令】：
