@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import ReactMarkdown from 'react-markdown';
 // @ts-ignore
 import html2pdf from 'html2pdf.js/dist/html2pdf.min.js';
-import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink } from 'lucide-react';
+import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import { saveHistory, getHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -25,59 +26,48 @@ const MODELS = [
   { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite (極速)', inputPrice: 0.0375, outputPrice: 0.15 },
 ];
 
-const splitTextIntoChunks = (text: string, maxChunkSize: number = 4000) => {
-  // First, split by headings to keep sections together as much as possible
-  const sections = text.split(/(?=\n#+ )/);
+const splitTextIntoChunks = (text: string, maxChunkSize: number = 8000) => {
+  // 1. First try to split by Markdown headings (H1, H2, H3) to keep sections intact
+  const sections = text.split(/(?=\n#{1,3} )/);
   const chunks: string[] = [];
   let currentChunk = '';
 
   for (const section of sections) {
-    // If a single section is too long, split it by paragraphs
+    if (currentChunk.length + section.length > maxChunkSize && currentChunk.length > 0) {
+      chunks.push(currentChunk.trim());
+      currentChunk = '';
+    }
+
     if (section.length > maxChunkSize) {
-      if (currentChunk.length > 0) {
-        chunks.push(currentChunk);
-        currentChunk = '';
-      }
-      
+      // Section is too long, split by paragraphs
       const paragraphs = section.split(/\n\n+/);
       for (const paragraph of paragraphs) {
+        if (currentChunk.length + paragraph.length > maxChunkSize && currentChunk.length > 0) {
+          chunks.push(currentChunk.trim());
+          currentChunk = '';
+        }
+        
         if (paragraph.length > maxChunkSize) {
-          // If a single paragraph is still too long, we have to split it by sentences or lines
-          if (currentChunk.length > 0) {
-            chunks.push(currentChunk);
-            currentChunk = '';
+          // Paragraph too long, split by sentences
+          const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]+["'」』]?\s*/g) || [paragraph];
+          for (const sentence of sentences) {
+            if (currentChunk.length + sentence.length > maxChunkSize && currentChunk.length > 0) {
+              chunks.push(currentChunk.trim());
+              currentChunk = '';
+            }
+            currentChunk += sentence;
           }
-          
-          let remainingParagraph = paragraph;
-          while (remainingParagraph.length > maxChunkSize) {
-            // Try to find a good split point (period followed by space)
-            let splitPoint = remainingParagraph.lastIndexOf('. ', maxChunkSize);
-            if (splitPoint === -1) splitPoint = maxChunkSize;
-            else splitPoint += 1; // Include the period
-            
-            chunks.push(remainingParagraph.substring(0, splitPoint));
-            remainingParagraph = remainingParagraph.substring(splitPoint);
-          }
-          currentChunk = remainingParagraph;
         } else {
-          if ((currentChunk.length + paragraph.length + 2) > maxChunkSize && currentChunk.length > 0) {
-            chunks.push(currentChunk);
-            currentChunk = '';
-          }
           currentChunk += (currentChunk.length > 0 ? '\n\n' : '') + paragraph;
         }
       }
     } else {
-      if ((currentChunk.length + section.length) > maxChunkSize && currentChunk.length > 0) {
-        chunks.push(currentChunk);
-        currentChunk = '';
-      }
-      currentChunk += section;
+      currentChunk += (currentChunk.length > 0 && !currentChunk.endsWith('\n') ? '\n' : '') + section;
     }
   }
   
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
+  if (currentChunk.trim().length > 0) {
+    chunks.push(currentChunk.trim());
   }
   
   return chunks;
@@ -102,11 +92,21 @@ export default function App() {
   const [totalPages, setTotalPages] = useState(0);
   const [translatedText, setTranslatedText] = useState('');
   const [translationStyle, setTranslationStyle] = useState<string | null>(null);
+  const [characterMap, setCharacterMap] = useState<string>('');
+  const [plotSummary, setPlotSummary] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState('');
   const [toast, setToast] = useState<{id: number, message: string, type: 'success' | 'error'} | null>(null);
   const [autoDownload, setAutoDownload] = useState<'none' | 'epub' | 'pdf' | 'md'>('md');
   const [pendingDownload, setPendingDownload] = useState<'epub' | 'pdf' | 'md' | null>(null);
   const [isIframe, setIsIframe] = useState(false);
+  
+  // New features state
+  const [history, setHistory] = useState<HistoryRecord[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyToDelete, setHistoryToDelete] = useState<string | null>(null);
+  const [coverImage, setCoverImage] = useState<string | null>(null);
+  const [authorName, setAuthorName] = useState('');
+  const [currentFileId, setCurrentFileId] = useState<string | null>(null);
   
   // Action states
   const [isCopying, setIsCopying] = useState(false);
@@ -116,7 +116,64 @@ export default function App() {
 
   useEffect(() => {
     setIsIframe(window !== window.parent);
+    loadHistory();
   }, []);
+
+  const loadHistory = async () => {
+    try {
+      const records = await getAllHistory();
+      setHistory(records.sort((a, b) => b.timestamp - a.timestamp));
+    } catch (e) {
+      console.error("Failed to load history", e);
+    }
+  };
+
+  const handleLoadHistory = (record: HistoryRecord) => {
+    setCurrentFileId(record.id);
+    setCustomTitle(record.title);
+    setAuthorName(record.author || '');
+    setCoverImage(record.coverImage);
+    setExtractedText(record.extractedText);
+    setTranslatedText(record.translatedText);
+    setCurrentChunk(record.currentChunk);
+    setTotalChunks(record.totalChunks);
+    setSelectedModel(record.model);
+    setTranslationStyle(record.translationStyle || null);
+    setGlossary(record.glossaryText || '無');
+    
+    setFile(null);
+    setBase64Data(null);
+    setTokenCount(null);
+    
+    setShowHistory(false);
+    
+    if (record.status === 'translating' || record.status === 'error') {
+      showToast('已載入歷史紀錄，您可以繼續翻譯', 'success');
+    } else {
+      showToast('已載入歷史紀錄', 'success');
+    }
+  };
+
+  const handleDeleteHistory = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setHistoryToDelete(id);
+  };
+
+  const confirmDeleteHistory = async () => {
+    if (!historyToDelete) return;
+    await deleteHistory(historyToDelete);
+    loadHistory();
+    if (currentFileId === historyToDelete) {
+      setCurrentFileId(null);
+      setExtractedText('');
+      setTranslatedText('');
+      setCurrentChunk(0);
+      setTotalChunks(0);
+      setCustomTitle('');
+    }
+    setHistoryToDelete(null);
+    showToast('歷史紀錄已刪除', 'success');
+  };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     if (toastTimeoutRef.current) {
@@ -133,6 +190,20 @@ export default function App() {
   const [startTime, setStartTime] = useState<number | null>(null);
   const [estimatedRemainingTime, setEstimatedRemainingTime] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pdfWorkerRef = useRef<Worker | null>(null);
+
+  useEffect(() => {
+    // Initialize PDF worker
+    try {
+      pdfWorkerRef.current = new Worker(new URL('./pdf.worker.ts', import.meta.url), { type: 'module' });
+    } catch (err) {
+      console.error("Failed to initialize PDF worker:", err);
+    }
+    
+    return () => {
+      pdfWorkerRef.current?.terminate();
+    };
+  }, []);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -209,6 +280,14 @@ export default function App() {
     setTranslatedText('');
     setExtractedText('');
     setTokenCount(null);
+    setCurrentFileId(null);
+    setCoverImage(null);
+    setAuthorName('');
+    setCurrentChunk(0);
+    setTotalChunks(0);
+    setTranslationStyle(null);
+    setGlossary('無');
+    setCustomTitle('');
     
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -261,58 +340,54 @@ export default function App() {
           }
         });
         totalTokens = response.totalTokens;
+        setTokenCount(Math.round(totalTokens * 20));
       } else {
         const arrayBuffer = await fileToUse.arrayBuffer();
-        const pdfDoc = await PDFDocument.load(arrayBuffer);
-        const pageCount = pdfDoc.getPageCount();
         
-        if (pageCount <= 1000) {
-          const response = await ai.models.countTokens({
-            model: modelId,
-            contents: {
-              parts: [
-                { inlineData: { data: base64, mimeType: 'application/pdf' } },
-                { text: 'Translate this document into Traditional Chinese.' }
-              ]
-            }
-          });
-          totalTokens = response.totalTokens;
-        } else {
-          const CHUNK_SIZE = 500;
-          const chunks = Math.ceil(pageCount / CHUNK_SIZE);
-          
-          for (let i = 0; i < chunks; i++) {
-            const startPage = i * CHUNK_SIZE;
-            const endPage = Math.min(startPage + CHUNK_SIZE, pageCount) - 1;
-            const pageIndices = Array.from({length: endPage - startPage + 1}, (_, idx) => startPage + idx);
-            
-            const chunkPdf = await PDFDocument.create();
-            const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
-            copiedPages.forEach(page => chunkPdf.addPage(page));
-            
-            const chunkBytes = await chunkPdf.save();
-            const chunkBase64 = uint8ArrayToBase64(chunkBytes);
-            
-            const response = await ai.models.countTokens({
-              model: modelId,
-              contents: {
-                parts: [
-                  { inlineData: { data: chunkBase64, mimeType: 'application/pdf' } },
-                  { text: 'Translate this document into Traditional Chinese.' }
-                ]
-              }
-            });
-            totalTokens += response.totalTokens;
-          }
+        if (!pdfWorkerRef.current) {
+          throw new Error("PDF Worker not initialized");
         }
+
+        return new Promise<void>((resolve, reject) => {
+          const handleMessage = async (e: MessageEvent) => {
+            const { type, payload } = e.data;
+            
+            if (type === 'TOTAL_PAGES') {
+              setTotalPages(payload.pageCount);
+            } else if (type === 'TOKEN_CHUNK') {
+              try {
+                const response = await ai.models.countTokens({
+                  model: modelId,
+                  contents: {
+                    parts: [
+                      { inlineData: { data: payload.base64, mimeType: 'application/pdf' } },
+                      { text: 'Translate this document into Traditional Chinese.' }
+                    ]
+                  }
+                });
+                totalTokens += response.totalTokens;
+                if (payload.isLast) {
+                  setTokenCount(Math.round(totalTokens * 20));
+                  pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+                  resolve();
+                }
+              } catch (err) {
+                pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+                reject(err);
+              }
+            } else if (type === 'ERROR') {
+              pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+              reject(new Error(payload.message));
+            }
+          };
+
+          pdfWorkerRef.current?.addEventListener('message', handleMessage);
+          pdfWorkerRef.current?.postMessage({ 
+            type: 'CALCULATE_TOKENS', 
+            payload: { fileBuffer: arrayBuffer } 
+          });
+        });
       }
-      
-      // Multiply by 20 to roughly estimate the multi-stage process:
-      // 1. PDF -> Markdown (1x)
-      // 2. Markdown -> Glossary (~0.5x)
-      // 3. Markdown + Glossary + Context -> Translation (~0.8x)
-      // 4. Extra buffer as requested (20x total)
-      setTokenCount(Math.round(totalTokens * 20));
     } catch (err: any) {
       console.error(err);
       setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
@@ -323,15 +398,25 @@ export default function App() {
   };
 
   const handleTranslate = async () => {
-    if (!file || !base64Data) return;
+    if (!extractedText && (!file || !base64Data)) return;
+    
+    let startingChunk = currentChunk;
+    if (currentChunk === totalChunks && totalChunks > 0) {
+      startingChunk = 0;
+      setCurrentChunk(0);
+      setTranslatedText('');
+      setTranslationStyle(null);
+      setGlossary('無');
+    }
+    
     setIsTranslating(true);
-    setTranslationStage('extracting');
-    setTranslatedText('');
-    setTranslationStyle(null);
+    setTranslationStage(extractedText && startingChunk > 0 ? 'translating' : 'extracting');
+    if (startingChunk === 0) {
+      setTranslatedText('');
+      setTranslationStyle(null);
+    }
     setStatusMessage('');
     setError(null);
-    setCurrentChunk(0);
-    setTotalChunks(0);
     const currentStartTime = Date.now();
     setStartTime(currentStartTime);
     setEstimatedRemainingTime(null);
@@ -341,205 +426,236 @@ export default function App() {
       if (!apiKey) throw new Error("API Key 尚未設定");
       const ai = new GoogleGenAI({ apiKey });
       
+      const fileId = currentFileId || Date.now().toString();
+      setCurrentFileId(fileId);
+      
+      const saveCurrentState = async (status: 'translating' | 'completed' | 'error', current: number, total: number, extracted: string, translated: string, currentStyle: string | null, currentGlossary: string) => {
+        const record: HistoryRecord = {
+          id: fileId,
+          title: customTitle || file?.name || 'Untitled',
+          author: authorName,
+          coverImage: coverImage,
+          extractedText: extracted,
+          translatedText: translated,
+          currentChunk: current,
+          totalChunks: total,
+          status,
+          timestamp: Date.now(),
+          model: selectedModel,
+          translationStyle: currentStyle || undefined,
+          glossaryText: currentGlossary || undefined
+        };
+        await saveHistory(record);
+        loadHistory();
+      };
+
       let fullMarkdown = '';
-      const isMd = file.name.toLowerCase().endsWith('.md');
+      const isMd = file?.name?.toLowerCase().endsWith('.md');
       
       if (isMd || extractedText) {
         fullMarkdown = extractedText;
-      } else {
+      } else if (currentChunk === 0 && file) {
         const arrayBuffer = await file.arrayBuffer();
-        const pdfDoc = await PDFDocument.load(arrayBuffer);
-        const pdfjsDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
-        const pageCount = pdfDoc.getPageCount();
         
-        // --- STAGE 1: EXTRACTION ---
+        if (!pdfWorkerRef.current) {
+          throw new Error("PDF Worker not initialized");
+        }
+
+        // --- STAGE 1: EXTRACTION (Worker-assisted) ---
         setStatusMessage('正在從 PDF 提取文字...');
-        const EXTRACTION_CHUNK_SIZE = 5; // Extract 5 pages at a time
-        const extractionChunks = Math.ceil(pageCount / EXTRACTION_CHUNK_SIZE);
-        setTotalChunks(extractionChunks);
-
-        // Parallel extraction to improve efficiency
-        const results = new Array(extractionChunks);
-        let completedExtractions = 0;
-        const CONCURRENCY_LIMIT = 3;
-
-        const processExtractionChunk = async (i: number) => {
-          let success = false;
-          let retries = 0;
-          const MAX_RETRIES = 3;
-
-          const startPage = i * EXTRACTION_CHUNK_SIZE;
-          const endPage = Math.min(startPage + EXTRACTION_CHUNK_SIZE, pageCount) - 1;
-          const pageIndices = Array.from({length: endPage - startPage + 1}, (_, idx) => startPage + idx);
-          
-          const chunkPdf = await PDFDocument.create();
-          const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
-          copiedPages.forEach(page => chunkPdf.addPage(page));
-          
-          const chunkBytes = await chunkPdf.save();
-          const chunkBase64 = uint8ArrayToBase64(chunkBytes);
-          
-          let chunkRawText = '';
-          try {
-            for (let p = startPage + 1; p <= endPage + 1; p++) {
-              const page = await pdfjsDoc.getPage(p);
-              const textContent = await page.getTextContent();
-              const pageText = textContent.items.map((item: any) => item.str).join(' ');
-              chunkRawText += pageText + '\n';
-            }
-          } catch (e) {
-            console.warn(`Failed to extract raw text for chunk ${i}`, e);
-          }
-          
-          const rawTextLength = chunkRawText.replace(/\s+/g, '').length;
-          // Only use OCR if there is literally almost no text found. 
-          // 10 chars is enough to detect page numbers or small footers.
-          const hasRawText = rawTextLength > 10;
-
-          while (!success && retries < MAX_RETRIES) {
-            try {
-              const parts: any[] = [];
-              let systemInstruction = "";
-              
-              if (hasRawText) {
-                systemInstruction = "You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
-                parts.push({ text: `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n3. **絕對不要翻譯**：保持原始語言。\n4. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${chunkRawText}` });
-              } else {
-                // If there's NO raw text at all, then we definitely need OCR
-                systemInstruction = "You are a precise OCR, text extraction, and repair tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
-                parts.push({ inlineData: { data: chunkBase64, mimeType: 'application/pdf' } });
-                parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n3. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n4. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n5. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
-              }
-
-              // Add a small timeout-like race to prevent permanent hanging if SDK stalls
-              const apiCall = ai.models.generateContent({
-                model: selectedModel,
-                contents: { parts },
-                config: {
-                  systemInstruction,
-                  temperature: 0.1,
-                }
-              });
-              
-              const response = await apiCall;
-              const chunkExtractedText = response.text || '';
-              
-              results[i] = chunkExtractedText;
-              completedExtractions++;
-              setCurrentChunk(completedExtractions);
-              setStatusMessage(`正在提取文字 (已完成 ${completedExtractions}/${extractionChunks} 部分)...`);
-              
-              // Update preview with what we have so far (sorted)
-              setExtractedText(results.filter(r => r !== undefined).join('\n\n'));
-              
-              success = true;
-            } catch (err: any) {
-              console.error(`Chunk ${i} failed (attempt ${retries + 1}):`, err);
-              retries++;
-              if (retries >= MAX_RETRIES) {
-                // If it's the very last chunk and it's failing, we might just want to skip it if it's likely empty
-                if (i === extractionChunks - 1 && !hasRawText) {
-                   results[i] = "";
-                   success = true;
-                   completedExtractions++;
-                   setCurrentChunk(completedExtractions);
-                   return;
-                }
-                throw err;
-              }
-              await new Promise(resolve => setTimeout(resolve, 1000 * retries));
-            }
-          }
-        };
-
-        // Run with concurrency limit
-        const queue = [...Array(extractionChunks).keys()];
-        const workers = Array(Math.min(CONCURRENCY_LIMIT, extractionChunks)).fill(null).map(async () => {
-          while (queue.length > 0) {
-            const i = queue.shift()!;
-            await processExtractionChunk(i);
-          }
-        });
         
-        await Promise.all(workers);
+        const results: string[] = [];
+        let completedExtractions = 0;
+        let totalExtractionChunks = 0;
+
+        await new Promise<void>((resolve, reject) => {
+          const handleMessage = async (e: MessageEvent) => {
+            const { type, payload } = e.data;
+            
+            if (type === 'TOTAL_CHUNKS') {
+              totalExtractionChunks = payload.totalChunks;
+              setTotalChunks(payload.totalChunks);
+              results.length = payload.totalChunks;
+            } else if (type === 'EXTRACTION_CHUNK') {
+              const { index, base64, rawText, isLast } = payload;
+              
+              // Process the chunk using Gemini API on the main thread
+              try {
+                const rawTextLength = rawText.replace(/\s+/g, '').length;
+                const hasRawText = rawTextLength > 10;
+                
+                let success = false;
+                let retries = 0;
+                const MAX_RETRIES = 3;
+
+                while (!success && retries < MAX_RETRIES) {
+                  try {
+                    const parts: any[] = [];
+                    let systemInstruction = "";
+                    
+                    if (hasRawText) {
+                      systemInstruction = "You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
+                      parts.push({ text: `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n3. **絕對不要翻譯**：保持原始語言。\n4. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${rawText}` });
+                    } else {
+                      systemInstruction = "You are a precise OCR, text extraction, and repair tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
+                      parts.push({ inlineData: { data: base64, mimeType: 'application/pdf' } });
+                      parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n3. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n4. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n5. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
+                    }
+
+                    const response = await ai.models.generateContent({
+                      model: selectedModel,
+                      contents: { parts },
+                      config: {
+                        systemInstruction,
+                        temperature: 0.1,
+                      }
+                    });
+                    
+                    results[index] = response.text || '';
+                    success = true;
+                  } catch (err) {
+                    console.error(`Chunk ${index} failed (attempt ${retries + 1}):`, err);
+                    retries++;
+                    if (retries >= MAX_RETRIES) {
+                      if (index === totalExtractionChunks - 1 && !hasRawText) {
+                        results[index] = "";
+                        success = true;
+                      } else {
+                        throw err;
+                      }
+                    }
+                    await new Promise(r => setTimeout(r, 1000 * retries));
+                  }
+                }
+
+                completedExtractions++;
+                setCurrentChunk(completedExtractions);
+                setStatusMessage(`正在提取文字 (已完成 ${completedExtractions}/${totalExtractionChunks} 部分)...`);
+                setExtractedText(results.filter(r => r !== undefined).join('\n\n'));
+
+                if (totalExtractionChunks > 0 && completedExtractions === totalExtractionChunks) {
+                  pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+                  resolve();
+                }
+              } catch (err) {
+                pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+                reject(err);
+              }
+            } else if (type === 'ERROR') {
+              pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+              reject(new Error(payload.message));
+            }
+          };
+
+          pdfWorkerRef.current?.addEventListener('message', handleMessage);
+          pdfWorkerRef.current?.postMessage({ 
+            type: 'GET_EXTRACTION_CHUNKS', 
+            payload: { fileBuffer: arrayBuffer } 
+          });
+        });
+
         fullMarkdown = results.join('\n\n').trim();
         setExtractedText(fullMarkdown);
       }
 
       // --- STAGE 1.5: GLOSSARY GENERATION & STYLE ANALYSIS ---
-      setTranslationStage('analyzing');
-      setStatusMessage('正在提取專業術語與分析文本風格...');
-      let glossaryText = '無';
-      let detectedStyle = '一般/通用';
+      let glossaryText = glossary;
+      let detectedStyle = translationStyle || '一般/通用';
+      let detectedCharacters = characterMap;
       
-      try {
-        const [glossaryResponse, styleResponse] = await Promise.all([
-          ai.models.generateContent({
-            model: selectedModel,
-            contents: {
-              parts: [
-                { text: `你是一位專業的術語與角色管理專家。請深度閱讀以下文本，並執行以下任務：
-1. **章節標題提取**：識別文本中的所有章節標題、小節標題（通常是 Markdown 的 #, ##, ### 等）。
-2. **核心術語與實體提取**：識別文本中的關鍵技術術語、專有名詞。
-3. **文學要素提取 (若為小說)**：特別提取「人物名稱」、「地理位置」、「核心意象」或「特定物品」。
-4. **全域一致性定義**：為每個項目（包含章節標題）選定一個最精準、符合繁體中文習慣的譯名。確保目錄與內文中的標題譯名完全一致。
-
-請以純文字列表格式輸出，格式為：「- [英文名稱]: [繁體中文譯名]」。
-如果你認為某個項目不需要翻譯（如人名原名），請標註為「- [英文名稱]: [保持原名]」。
-不要輸出任何開頭、結尾或解釋性文字。
-
-文本內容：
-${fullMarkdown.substring(0, 50000)}` }
-              ]
-            }
-          }).catch(err => {
-            console.warn("Glossary generation failed, continuing without it.", err);
-            return { text: '無' };
-          }),
-          ai.models.generateContent({
-            model: selectedModel,
-            contents: {
-              parts: [
-                { text: `請作為資深文學編輯與編譯專家，為以下文本制定一份「翻譯風格指南」。請分析：
-1. **文本領域與類型**：(如：硬核科幻、浪漫小說、技術文件、學術論文)
-2. **敘事視角與語氣**：(如：冷峻的第三人稱、感性的第一人稱、正式客觀)
-3. **目標受眾與文化背景**：(如：青少年讀者、專業研究員、一般大眾)
-4. **特定風格規範**：(如：對話是否應口語化、是否保留特定外來語、對讀者的稱呼)
-
-請將以上分析總結成一段具體的「翻譯指令」。
-例如 (若為小說)：「這是一部帶有憂鬱色彩的現代小說。請採用流暢、具有文學美感的繁體中文，避免生硬的翻譯腔。對話應符合角色性格，保留原文的隱喻與情感張力。」
-不要輸出任何多餘的解釋。
-
-文本內容：
-${fullMarkdown.substring(0, 5000)}` }
-              ]
-            }
-          }).catch(err => {
-            console.warn("Style analysis failed, continuing with default style.", err);
-            return { text: '一般/通用' };
-          })
-        ]);
+      if (startingChunk === 0) {
+        setTranslationStage('analyzing');
+        setStatusMessage('正在提取專業術語、角色關係與分析文本風格...');
         
-        glossaryText = glossaryResponse.text || '無';
-        detectedStyle = styleResponse.text?.trim() || '一般/通用';
-        setTranslationStyle(detectedStyle);
-      } catch (err) {
-        console.warn("Analysis failed, continuing with defaults.", err);
-        setTranslationStyle('一般/通用');
+        try {
+          const [glossaryResponse, styleResponse] = await Promise.all([
+            ai.models.generateContent({
+              model: selectedModel,
+              contents: {
+                parts: [
+                  { text: `你是一位專業的文學編輯與角色管理專家。請深度閱讀以下文本，並執行以下任務：
+  1. **核心術語提取**：識別文本中的關鍵技術術語、專有名詞。
+  2. **角色關係圖 (Character Map)**：提取所有出現的人物名稱、性別、性格特徵、說話語氣以及他們之間的關係。
+  3. **全域一致性定義**：為每個項目選定一個最精準、符合繁體中文習慣的譯名。
+  
+  請以純文字格式輸出：
+  【術語表】：
+  - [英文]: [中文]
+  
+  【角色圖譜】：
+  - [角色名]: [性別/性格/關係描述]
+  
+  不要輸出任何開頭、結尾 or 解釋性文字。
+  
+  文本內容：
+  ${fullMarkdown.substring(0, 50000)}` }
+                ]
+              }
+            }).catch(err => {
+              console.warn("Analysis failed, continuing without it.", err);
+              return { text: '無' };
+            }),
+            ai.models.generateContent({
+              model: selectedModel,
+              contents: {
+                parts: [
+                  { text: `請作為資深文學編輯與編譯專家，為以下文本制定一份「翻譯風格指南」。請分析：
+  1. **文本領域與類型**：(如：硬核科幻、浪漫小說、技術文件、學術論文)
+  2. **敘事視角與語氣**：(如：冷峻的第三人稱、感性的第一人稱、正式客觀)
+  3. **目標受眾與文化背景**：(如：青少年讀者、專業研究員、一般大眾)
+  4. **特定風格規範**：(如：對話是否應口語化、是否保留特定外來語、對讀者的稱呼)
+  
+  請簡潔地列出風格指南。
+  
+  文本內容：
+  ${fullMarkdown.substring(0, 30000)}` }
+                ]
+              }
+            }).catch(err => {
+              console.warn("Style analysis failed, continuing with default style.", err);
+              return { text: '一般/通用' };
+            })
+          ]);
+          
+          const analysisText = glossaryResponse.text || '';
+          const glossaryMatch = analysisText.match(/【術語表】：([\s\S]*?)(?=【角色圖譜】：|$)/);
+          const characterMatch = analysisText.match(/【角色圖譜】：([\s\S]*)/);
+          
+          glossaryText = glossaryMatch ? glossaryMatch[1].trim() : '無';
+          detectedCharacters = characterMatch ? characterMatch[1].trim() : '無';
+          detectedStyle = styleResponse.text?.trim() || '一般/通用';
+          
+          setTranslationStyle(detectedStyle);
+          setGlossary(glossaryText);
+          setCharacterMap(detectedCharacters);
+        } catch (err) {
+          console.warn("Analysis failed, continuing with defaults.", err);
+          setTranslationStyle('一般/通用');
+          setGlossary('無');
+          setCharacterMap('無');
+        }
       }
       
       // --- STAGE 2: TRANSLATION ---
       setTranslationStage('translating');
       setStatusMessage('正在準備翻譯...');
-      const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 3000) : [fullMarkdown];
+      // Gemini 3 has a huge context window, but output is limited to 8192 tokens per request.
+      // 15000 characters is a safe upper bound to ensure the translated output doesn't get truncated.
+      const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 8000) : [fullMarkdown];
       const translationChunksCount = textChunks.length;
       setTotalChunks(translationChunksCount);
-      setCurrentChunk(0);
       
-      let fullTranslatedText = '';
-      let previousTranslatedText = '';
+      let fullTranslatedText = translatedText; // Start with what we already have
+      let previousTranslatedText = translatedText.slice(-1000);
       
-      for (let i = 0; i < translationChunksCount; i++) {
+      // Start from the current chunk if resuming
+      const startChunk = startingChunk;
+      let previousSourceText = startChunk > 0 ? textChunks[startChunk - 1].slice(-1000) : '';
+      let dynamicGlossary = glossaryText;
+      let dynamicCharacterMap = detectedCharacters;
+      let dynamicPlotSummary = plotSummary;
+      
+      for (let i = startChunk; i < translationChunksCount; i++) {
         setCurrentChunk(i + 1);
         setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
         
@@ -548,28 +664,47 @@ ${fullMarkdown.substring(0, 5000)}` }
         const MAX_RETRIES = 6;
         let currentChunkTranslated = '';
 
-        const promptText = `你是一位世界級的專業翻譯專家，精通技術文件與學術著作的編譯。
-請將以下 Markdown 文本翻譯成繁體中文。
+        const systemInstruction = `你是一位世界級的專業翻譯專家與文學編輯，精通長篇小說與技術文件的編譯。
+你的唯一任務是將使用者提供的文本翻譯成繁體中文。
 
-【翻譯指南】：
-1. **風格目標**：${detectedStyle}
-2. **術語與標題一致性**：${glossaryText !== '無' ? `必須嚴格遵守以下術語與標題表，確保目錄與內文標題完全一致：\n${glossaryText}` : '保持專有名詞與章節標題前後統一。'}
-3. **上下文銜接**：${previousTranslatedText ? `參考上一段的譯文風格：\n${previousTranslatedText}` : '這是文件的開頭。'}
+【全域翻譯指南與風格】：
+${detectedStyle}
 
-【執行步驟】：
-第一步：**精準直譯**。特別注意 Markdown 標題（# 等），若標題在術語表中，必須使用表中的譯名。
-第二步：**語意潤色**。在不改變原意的前提下，調整句式使其符合繁體中文的閱讀習慣。
-第三步：**自我校對**。檢查是否有漏譯、術語不統一或語意模糊的地方。
+【全域術語表 (Glossary)】：
+請嚴格遵守以下術語表，確保譯名完全一致：
+${dynamicGlossary !== '無' ? dynamicGlossary : '保持專有名詞與章節標題前後統一。'}
 
-【嚴格禁令】：
-- 嚴禁摘要、嚴禁刪減、嚴禁跳過任何內容。
-- 嚴禁輸出任何與譯文無關的解釋、評論或提示詞。
+【角色圖譜 (Character Map)】：
+請根據以下角色設定，確保對話語氣與人稱（他/她/它）一致：
+${dynamicCharacterMap !== '無' ? dynamicCharacterMap : '自動識別角色並保持一致。'}
 
+【前情提要 (Plot Summary)】：
+${dynamicPlotSummary ? `目前故事進展：\n${dynamicPlotSummary}` : '這是故事的開頭。'}
+
+${previousSourceText ? `【前文參考 (Context)】：
+為了確保上下文銜接順暢（如代名詞、語氣、連貫性），請參考上一段的原文與譯文：
+[上一段原文]：
+${previousSourceText}
+[上一段譯文]：
+${previousTranslatedText}` : ''}
+
+【強制約束】：
+1. 零漏譯：嚴禁摘要、嚴禁刪減、嚴禁跳過任何段落或句子。即使是重複或看似不重要的內容也必須翻譯。
+2. 嚴禁輸出任何與譯文無關的解釋、評論或提示詞。
+3. 必須 100% 符合術語表與角色圖譜。
+4. 確保標點符號符合繁體中文規範（如使用全形標點，避免英文逗號誤用）。
+5. 嚴禁「超譯」與「幻覺」：不要為了語句優美而加入原文中不存在的形容詞、副詞或任何描述性內容。保持譯文精簡且 100% 忠於原意。
+6. 嚴格保留原文的 Markdown 格式與分段結構：確保標題、段落、清單等格式與原文完全一致，不要將段落合併。
+7. 純譯文輸出：嚴禁在翻譯結果中保留或夾雜原始語言（如英文）的「句子或段落」，絕對不要輸出「原文+譯文」的雙語對照格式。但【允許且鼓勵】在專有名詞、人名或技術術語的中文翻譯後方，以括號保留英文原文（例如：跳躍 (Jaunt)），以幫助讀者理解。`;
+
+        const promptText = `請翻譯以下文本。
 【待翻譯文本】：
 ${textChunks[i]}`;
 
         while (!success && retries < MAX_RETRIES) {
           try {
+            // Step 1: Draft Translation (Streaming)
+            setStatusMessage(`正在翻譯初稿 (第 ${i + 1}/${translationChunksCount} 部分)...`);
             const responseStream = await ai.models.generateContentStream({
               model: selectedModel,
               contents: {
@@ -578,7 +713,7 @@ ${textChunks[i]}`;
                 ]
               },
               config: {
-                systemInstruction: "You are a highly accurate translator. Your goal is to translate the provided text into Traditional Chinese with 100% fidelity. DO NOT skip any sentences, DO NOT summarize, and DO NOT add any information that is not in the source text. Maintain all Markdown formatting exactly.",
+                systemInstruction,
                 temperature: 0.2,
               }
             });
@@ -593,11 +728,133 @@ ${textChunks[i]}`;
             const sourceLength = textChunks[i].replace(/\s+/g, '').length;
             const targetLength = currentChunkTranslated.replace(/\s+/g, '').length;
             
-            // For English to Chinese, the character count usually decreases, but shouldn't be less than 10% of source
-            // 15% was sometimes too strict for documents with many numbers or code blocks.
-            if (sourceLength > 100 && targetLength < sourceLength * 0.1) {
+            // For English to Chinese, the character count usually decreases.
+            // Some texts (like code, numbers, or short paragraphs) might shrink significantly.
+            // We only trigger retry if the source is substantial and the target is extremely short.
+            if (sourceLength > 150 && targetLength < sourceLength * 0.05) {
               console.warn(`Translation validation failed for chunk ${i + 1}. Source length: ${sourceLength}, Target length: ${targetLength}. Retrying...`);
               throw new Error("Translated text is suspiciously short. Possible omission.");
+            }
+
+            // Step 2: Self-Correction & Context Update
+            setStatusMessage(`正在自我校對與更新術語 (第 ${i + 1}/${translationChunksCount} 部分)...`);
+            
+            const correctionResponse = await ai.models.generateContent({
+              model: selectedModel,
+              contents: {
+                parts: [
+                  { text: `請對以下翻譯進行嚴格的自我校對，並提取新出現的專有名詞與劇情發展。
+
+【原文】：
+${textChunks[i]}
+
+【初稿譯文】：
+${currentChunkTranslated}
+
+【現有術語表】：
+${dynamicGlossary}
+
+【現有角色圖譜】：
+${dynamicCharacterMap}
+
+【任務 1：自我校對與零漏譯檢查】：
+請檢查初稿是否有：
+1. **漏譯或誤譯**：檢查是否有任何句子、段落被跳過或未翻譯。
+2. 標點符號錯誤。
+3. 未遵守現有術語表與角色圖譜。
+4. **幻覺或超譯**：檢查譯文是否加入了原文中不存在的資訊。
+5. **格式檢查**：確保譯文保留了原文所有的 Markdown 標記（如 # 標題、* 列表等）以及正確的分段與換行。
+6. **夾雜原文檢查**：確保初稿中沒有殘留未翻譯的英文「句子或段落」（絕對不可包含雙語對照的段落）。但請【保留】專有名詞、人名或技術術語後方的英文括號註釋（例如：跳躍 (Jaunt)）。如果發現整句或整段未翻譯的英文，請將其翻譯為繁體中文。
+請直接提供修正後的「最終完美譯文」。
+
+【任務 2：動態上下文提取】：
+請分析本段內容並提取：
+1. **新術語**：新出現的專有名詞（格式：- [英文]: [中文]）。
+2. **新角色/角色發展**：新出現的角色或現有角色的新資訊（如性別、新關係）。
+3. **劇情摘要**：用 50 字內簡述本段發生的關鍵劇情。
+
+請以 JSON 格式回傳。` }
+                ]
+              },
+              config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    correctedTranslation: {
+                      type: Type.STRING,
+                      description: "修正後的最終完整譯文。必須嚴格保留原文的 Markdown 格式、標題結構與分段換行，不可合併段落。嚴禁夾雜未翻譯的英文句子或段落，但允許在專有名詞後保留英文括號註釋。"
+                    },
+                    newTerms: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: "新提取的術語列表"
+                    },
+                    newCharacters: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: "新提取的角色資訊"
+                    },
+                    chunkSummary: {
+                      type: Type.STRING,
+                      description: "本段劇情的極簡摘要"
+                    },
+                    foundHallucinations: {
+                      type: Type.BOOLEAN,
+                      description: "是否在初稿中發現了原文不存在的超譯或幻覺內容"
+                    },
+                    missingContentDetected: {
+                      type: Type.BOOLEAN,
+                      description: "是否在初稿中發現了漏譯（未翻譯的句子或段落）"
+                    }
+                  },
+                  required: ["correctedTranslation", "newTerms", "newCharacters", "chunkSummary", "foundHallucinations", "missingContentDetected"]
+                },
+                temperature: 0,
+              }
+            });
+
+            try {
+              const correctionResult = JSON.parse(correctionResponse.text || '{}');
+              
+              if (correctionResult.missingContentDetected) {
+                console.warn(`Missing content detected in chunk ${i + 1}. Retrying with higher emphasis on completeness.`);
+                retries++;
+                if (retries < MAX_RETRIES) {
+                  currentChunkTranslated = '';
+                  continue; // Retry this chunk
+                }
+              }
+
+              if (correctionResult.correctedTranslation) {
+                currentChunkTranslated = correctionResult.correctedTranslation;
+                // Update UI with corrected translation
+                setTranslatedText(fullTranslatedText + currentChunkTranslated);
+              }
+              
+              if (correctionResult.newTerms && correctionResult.newTerms.length > 0) {
+                const newTermsStr = correctionResult.newTerms.join('\n');
+                dynamicGlossary += (dynamicGlossary === '無' ? '' : '\n') + newTermsStr;
+                setGlossary(dynamicGlossary);
+              }
+
+              if (correctionResult.newCharacters && correctionResult.newCharacters.length > 0) {
+                const newCharsStr = correctionResult.newCharacters.join('\n');
+                dynamicCharacterMap += (dynamicCharacterMap === '無' ? '' : '\n') + newCharsStr;
+                setCharacterMap(dynamicCharacterMap);
+              }
+
+              if (correctionResult.chunkSummary) {
+                dynamicPlotSummary = dynamicPlotSummary ? `${dynamicPlotSummary}\n- ${correctionResult.chunkSummary}` : `- ${correctionResult.chunkSummary}`;
+                // Keep plot summary concise (last 10 points)
+                const summaryLines = dynamicPlotSummary.split('\n');
+                if (summaryLines.length > 10) {
+                  dynamicPlotSummary = summaryLines.slice(-10).join('\n');
+                }
+                setPlotSummary(dynamicPlotSummary);
+              }
+            } catch (e) {
+              console.warn("Failed to parse correction response, using draft translation.", e);
             }
 
             success = true;
@@ -625,6 +882,10 @@ ${textChunks[i]}`;
         fullTranslatedText += currentChunkTranslated + '\n\n';
         setTranslatedText(fullTranslatedText);
         previousTranslatedText = currentChunkTranslated.slice(-1000); // Keep last 1000 chars for context
+        previousSourceText = textChunks[i].slice(-1000);
+        
+        // Save progress to IndexedDB
+        await saveCurrentState('translating', i + 1, translationChunksCount, fullMarkdown, fullTranslatedText, translationStyle, dynamicGlossary);
         
         // Estimation update
         const now = Date.now();
@@ -640,6 +901,8 @@ ${textChunks[i]}`;
         }
       }
       
+      await saveCurrentState('completed', translationChunksCount, translationChunksCount, fullMarkdown, fullTranslatedText, translationStyle, glossary);
+      
       if (fullTranslatedText && autoDownload !== 'none') {
         setPendingDownload(autoDownload);
       }
@@ -647,6 +910,25 @@ ${textChunks[i]}`;
     } catch (err: any) {
       console.error(err);
       setError(`翻譯失敗 (Translation failed): ${err.message}`);
+      if (currentFileId) {
+        const record: HistoryRecord = {
+          id: currentFileId,
+          title: customTitle || file?.name || 'Untitled',
+          author: authorName,
+          coverImage: coverImage,
+          extractedText: extractedText,
+          translatedText: translatedText,
+          currentChunk: currentChunk,
+          totalChunks: totalChunks,
+          status: 'error',
+          timestamp: Date.now(),
+          model: selectedModel,
+          translationStyle: translationStyle || undefined,
+          glossaryText: glossary || undefined
+        };
+        await saveHistory(record);
+        loadHistory();
+      }
     } finally {
       setIsTranslating(false);
       setTranslationStage(null);
@@ -685,9 +967,10 @@ ${textChunks[i]}`;
       if (!element) throw new Error("找不到內容元素");
 
       const contentHtml = element.innerHTML;
+      const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
       const defaultTitle = activeTab === 'translate' 
-        ? `${file?.name.replace(/\.(pdf|md)$/i, '') || 'document'}_翻譯`
-        : (customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document');
+        ? `${baseName}_翻譯`
+        : baseName;
 
       // 建立列印專用的隱藏 Iframe
       const iframe = document.createElement('iframe');
@@ -813,9 +1096,10 @@ ${textChunks[i]}`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
+    const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
     const defaultTitle = activeTab === 'translate' 
-      ? `${file?.name.replace(/\.(pdf|md)$/i, '') || 'document'}_翻譯`
-      : (customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document');
+      ? `${baseName}_翻譯`
+      : baseName;
     a.download = `${defaultTitle}.md`;
     document.body.appendChild(a);
     a.click();
@@ -881,7 +1165,7 @@ ${textChunks[i]}`;
         fullText = await file.text();
       } else {
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         const numPages = pdf.numPages;
         
         for (let i = 1; i <= numPages; i++) {
@@ -895,7 +1179,8 @@ ${textChunks[i]}`;
       }
       
       setStatusMessage('正在產生 EPUB...');
-      const titleToUse = customTitle.trim() || file.name.replace(/\.(pdf|md)$/i, '');
+      const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
+      const titleToUse = baseName;
       
       const response = await fetch('/api/generate-epub', {
         method: 'POST',
@@ -905,6 +1190,8 @@ ${textChunks[i]}`;
         body: JSON.stringify({
           title: titleToUse,
           markdown: fullText,
+          author: authorName || undefined,
+          cover: coverImage || undefined
         }),
       });
 
@@ -952,9 +1239,10 @@ ${textChunks[i]}`;
     await new Promise(resolve => setTimeout(resolve, 50));
     
     try {
+      const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
       const defaultTitle = activeTab === 'translate' 
-        ? `${file?.name.replace(/\.(pdf|md)$/i, '') || 'document'}_翻譯`
-        : (customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document');
+        ? `${baseName}_翻譯`
+        : baseName;
 
       const response = await fetch('/api/generate-epub', {
         method: 'POST',
@@ -964,6 +1252,8 @@ ${textChunks[i]}`;
         body: JSON.stringify({
           title: defaultTitle,
           markdown: text,
+          author: authorName || undefined,
+          cover: coverImage || undefined
         }),
       });
 
@@ -977,7 +1267,7 @@ ${textChunks[i]}`;
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${file?.name.replace('.pdf', '') || 'document'}_翻譯.epub`;
+      a.download = `${baseName}_翻譯.epub`;
       document.body.appendChild(a);
       a.click();
       
@@ -1132,9 +1422,18 @@ ${textChunks[i]}`;
             </div>
             <h1 className="text-xl font-semibold tracking-tight text-slate-100">PDF 翻譯神器</h1>
           </div>
-          <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner">
-            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-            已綁定個人 API Key
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShowHistory(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
+            >
+              <History className="w-4 h-4" />
+              歷史紀錄
+            </button>
+            <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              已綁定個人 API Key
+            </div>
           </div>
         </div>
       </header>
@@ -1273,6 +1572,63 @@ ${textChunks[i]}`;
                   </div>
                 </div>
               )}
+
+              <div className="mt-6 pt-6 border-t border-slate-800">
+                <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                  <Book className="w-4 h-4 text-blue-400" />
+                  EPUB 匯出設定
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1.5">作者名稱 (選填)</label>
+                    <input
+                      type="text"
+                      value={authorName}
+                      onChange={(e) => setAuthorName(e.target.value)}
+                      placeholder="例如：John Doe"
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1.5">自訂封面圖片 (選填)</label>
+                    <div className="flex items-center gap-3">
+                      <label className="flex-1 cursor-pointer">
+                        <div className="flex items-center justify-center gap-2 px-3 py-2 bg-slate-950 border border-slate-700 border-dashed rounded-lg text-sm text-slate-400 hover:text-slate-200 hover:border-slate-500 transition-colors">
+                          <ImageIcon className="w-4 h-4" />
+                          {coverImage ? '更換封面' : '上傳圖片'}
+                        </div>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = (e) => setCoverImage(e.target?.result as string);
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                        />
+                      </label>
+                      {coverImage && (
+                        <button
+                          onClick={() => setCoverImage(null)}
+                          className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+                          title="移除封面"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    {coverImage && (
+                      <div className="mt-2 relative w-20 h-28 rounded-md overflow-hidden border border-slate-700 shadow-sm">
+                        <img src={coverImage} alt="Cover Preview" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
 
               {activeTab === 'translate' && file && (
                 <div className="mt-6 bg-slate-950/50 rounded-xl p-4 border border-slate-800 shadow-inner">
@@ -1516,6 +1872,112 @@ ${textChunks[i]}`;
 
         </div>
       </main>
+
+      {/* History Modal */}
+      {showHistory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50">
+              <h2 className="text-xl font-semibold text-slate-100 flex items-center gap-2">
+                <History className="w-5 h-5 text-blue-400" />
+                歷史紀錄
+              </h2>
+              <button 
+                onClick={() => setShowHistory(false)}
+                className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-6">
+              {history.length === 0 ? (
+                <div className="text-center py-12 text-slate-500">
+                  <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                  <p>尚無歷史紀錄</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {history.map(record => (
+                    <div 
+                      key={record.id}
+                      onClick={() => handleLoadHistory(record)}
+                      className={`p-4 rounded-xl border transition-all cursor-pointer group ${
+                        currentFileId === record.id 
+                          ? 'bg-blue-900/20 border-blue-500/50 shadow-[0_0_15px_rgba(37,99,235,0.1)]' 
+                          : 'bg-slate-800/50 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-medium text-slate-200 truncate mb-1">
+                            {record.title}
+                          </h3>
+                          <div className="flex items-center gap-3 text-xs text-slate-400">
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5" />
+                              {new Date(record.timestamp).toLocaleString()}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              {record.status === 'completed' ? (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                              ) : record.status === 'error' ? (
+                                <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                              ) : (
+                                <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />
+                              )}
+                              {record.status === 'completed' ? '已完成' : record.status === 'error' ? '錯誤' : `翻譯中 (${record.currentChunk}/${record.totalChunks})`}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => handleDeleteHistory(record.id, e)}
+                          className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                          title="刪除紀錄"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {historyToDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4 text-red-400">
+                <AlertCircle className="w-6 h-6" />
+                <h2 className="text-xl font-semibold">確認刪除</h2>
+              </div>
+              <p className="text-slate-300 mb-6">
+                您確定要刪除這筆歷史紀錄嗎？此操作無法復原。
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setHistoryToDelete(null)}
+                  className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={confirmDeleteHistory}
+                  className="px-4 py-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors"
+                >
+                  確認刪除
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

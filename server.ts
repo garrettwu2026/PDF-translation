@@ -25,7 +25,7 @@ async function startServer() {
 
   app.post('/api/generate-epub', async (req, res) => {
     try {
-      const { title, markdown } = req.body;
+      const { title, markdown, author, cover } = req.body;
       if (!markdown) {
         return res.status(400).json({ error: 'Missing markdown content' });
       }
@@ -66,14 +66,20 @@ async function startServer() {
         epubChapters.push({ title: '內容', content: '<p>無內容</p>' });
       }
 
+      const epubOptions: any = { 
+        title: title || 'Translated Document', 
+        author: author || 'AI Translator',
+        date: new Date().toISOString().split('.')[0] + 'Z',
+        lang: 'zh-TW',
+        tocTitle: '目錄'
+      };
+
+      if (cover) {
+        epubOptions.cover = cover;
+      }
+
       const epubBuffer = await epub(
-        { 
-          title: title || 'Translated Document', 
-          author: 'AI Translator',
-          date: new Date().toISOString().split('.')[0] + 'Z',
-          lang: 'zh-TW',
-          tocTitle: '目錄'
-        },
+        epubOptions,
         epubChapters
       );
 
