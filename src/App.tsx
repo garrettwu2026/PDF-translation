@@ -729,11 +729,17 @@ ${textChunks[i]}`;
             const targetLength = currentChunkTranslated.replace(/\s+/g, '').length;
             
             // For English to Chinese, the character count usually decreases.
-            // Some texts (like code, numbers, or short paragraphs) might shrink significantly.
             // We only trigger retry if the source is substantial and the target is extremely short.
-            if (sourceLength > 150 && targetLength < sourceLength * 0.05) {
-              console.warn(`Translation validation failed for chunk ${i + 1}. Source length: ${sourceLength}, Target length: ${targetLength}. Retrying...`);
-              throw new Error("Translated text is suspiciously short. Possible omission.");
+            // Changed threshold from 0.05 to 0.02 to avoid false positives on concise translations or texts with lots of whitespace.
+            if (sourceLength > 150 && targetLength < sourceLength * 0.02) {
+              console.warn(`Translation validation failed for chunk ${i + 1}. Source length: ${sourceLength}, Target length: ${targetLength}.`);
+              console.warn(`Source text: ${textChunks[i].substring(0, 200)}...`);
+              console.warn(`Translated text: ${currentChunkTranslated}`);
+              if (retries < 2) {
+                throw new Error("Translated text is suspiciously short. Possible omission.");
+              } else {
+                console.warn(`Accepting short translation after ${retries} retries to prevent translation failure.`);
+              }
             }
 
             // Step 2: Self-Correction & Context Update
@@ -1772,9 +1778,11 @@ ${dynamicCharacterMap}
                   {translationStyle && (
                     <div className="mt-4 p-3 bg-indigo-950/30 border border-indigo-900/50 text-indigo-300 rounded-lg text-sm flex items-start gap-2">
                       <FileText className="w-5 h-5 shrink-0 mt-0.5 text-indigo-400" />
-                      <div>
-                        <span className="font-semibold text-indigo-200">AI 偵測翻譯風格：</span>
-                        {translationStyle}
+                      <div className="flex-1 overflow-hidden">
+                        <div className="font-semibold text-indigo-200 mb-1">AI 偵測翻譯風格：</div>
+                        <div className="prose prose-sm prose-invert max-w-none">
+                          <ReactMarkdown>{translationStyle}</ReactMarkdown>
+                        </div>
                       </div>
                     </div>
                   )}
