@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 // @ts-ignore
 import html2pdf from 'html2pdf.js/dist/html2pdf.min.js';
 import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock } from 'lucide-react';
@@ -208,6 +209,12 @@ export default function App() {
   useEffect(() => {
     const checkKey = async () => {
       try {
+        // Check if environment variable is already available
+        if (process.env.API_KEY || process.env.GEMINI_API_KEY) {
+          setIsKeySelected(true);
+          return;
+        }
+
         let attempts = 0;
         // @ts-ignore
         while (typeof window !== 'undefined' && !window.aistudio && attempts < 10) {
@@ -495,11 +502,11 @@ export default function App() {
                     
                     if (hasRawText) {
                       systemInstruction = "You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
-                      parts.push({ text: `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n3. **絕對不要翻譯**：保持原始語言。\n4. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${rawText}` });
+                      parts.push({ text: `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n4. **絕對不要翻譯**：保持原始語言。\n5. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${rawText}` });
                     } else {
                       systemInstruction = "You are a precise OCR, text extraction, and repair tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
                       parts.push({ inlineData: { data: base64, mimeType: 'application/pdf' } });
-                      parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n3. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n4. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n5. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
+                      parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n4. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n5. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n6. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
                     }
 
                     const response = await ai.models.generateContent({
@@ -694,9 +701,10 @@ ${previousTranslatedText}` : ''}
 3. 必須 100% 符合術語表與角色圖譜。
 4. 確保標點符號符合繁體中文規範（如使用全形標點，避免英文逗號誤用）。
 5. 嚴禁「超譯」與「幻覺」：不要為了語句優美而加入原文中不存在的形容詞、副詞或任何描述性內容。保持譯文精簡且 100% 忠於原意。
-6. 嚴格保留原文的 Markdown 格式與分段結構：確保標題、段落、清單等格式與原文完全一致，不要將段落合併。
+6. 嚴格保留原文的 Markdown 格式與分段結構：確保標題、段落、清單等格式與原文完全一致，不要將段落合併（除非是為了修復對話排版，見第9點）。
 7. 純譯文輸出：嚴禁在翻譯結果中保留或夾雜原始語言（如英文）的「句子或段落」，絕對不要輸出「原文+譯文」的雙語對照格式。但【允許且鼓勵】在專有名詞、人名或技術術語的中文翻譯後方，以括號保留英文原文（例如：跳躍 (Jaunt)），以幫助讀者理解。
-8. 雙關語與隱喻處理：請敏銳偵測原文中的雙關語、幽默、隱喻或言外之意。盡可能在譯文中重現對等的修辭效果與雙重語意；若中英文無法完美對應，請以最符合上下文語境的方式進行「意譯」，切勿生硬直譯導致失去原有的文字趣味。`;
+8. 雙關語與隱喻處理：請敏銳偵測原文中的雙關語、幽默、隱喻或言外之意。盡可能在譯文中重現對等的修辭效果與雙重語意；若中英文無法完美對應，請以最符合上下文語境的方式進行「意譯」，切勿生硬直譯導致失去原有的文字趣味。
+9. 強制對話換行：這是極度重要的規則！只要遇到人物對話（通常包含在引號內），**必須強制獨立成段（換行）**。即使原文中多個角色的對話、或是對話與敘事描述擠在同一個段落，你也**絕對要主動將它們拆分成不同的段落**。每個角色的對話必須獨立一行，並使用繁體中文標準引號（「」與『』）。`;
 
         const promptText = `請翻譯以下文本。
 【待翻譯文本】：
@@ -773,6 +781,7 @@ ${dynamicCharacterMap}
 5. **格式檢查**：確保譯文保留了原文所有的 Markdown 標記（如 # 標題、* 列表等）以及正確的分段與換行。
 6. **夾雜原文檢查**：確保初稿中沒有殘留未翻譯的英文「句子或段落」（絕對不可包含雙語對照的段落）。但請【保留】專有名詞、人名或技術術語後方的英文括號註釋（例如：跳躍 (Jaunt)）。如果發現整句或整段未翻譯的英文，請將其翻譯為繁體中文。
 7. **雙關語與語氣檢查**：確認原文中的雙關語、隱喻或特殊語氣是否被妥善保留並轉化為自然流暢的中文，避免生硬直譯。
+8. **強制對話換行檢查**：這是極度重要的檢查！仔細審視所有對話。如果同一個段落內包含兩個以上角色的對話，或者對話與大段敘事描述擠在一起，**必須強制拆分成多個段落（換行）**。確保每個角色的對話都獨立一行。
 請直接提供修正後的「最終完美譯文」。
 
 【任務 2：動態上下文提取】：
@@ -1325,20 +1334,20 @@ ${dynamicCharacterMap}
           <div className="w-16 h-16 bg-blue-900/30 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
             <Key className="w-8 h-8" />
           </div>
-          <h2 className="text-2xl font-semibold mb-2 text-slate-100">需要綁定 API Key</h2>
+          <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
           <p className="text-slate-400 mb-6 text-sm leading-relaxed">
-            為了保護開發者的額度，使用此翻譯工具需要您自備 Google Gemini API Key。請點擊下方按鈕綁定您的金鑰。
+            使用此翻譯工具需要 Google Gemini API Key。您可以透過 AI Studio 自動綁定，或手動輸入您的專屬金鑰。
           </p>
           <button
             onClick={handleSelectKey}
             className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 mb-4"
           >
-            自動選擇或輸入 API Key
+            透過 AI Studio 自動選擇 API Key
           </button>
 
           <div className="mt-6 pt-6 border-t border-slate-800 text-left">
-            <p className="text-sm text-slate-300 mb-3 font-medium">Safari / iOS 用戶替代方案：</p>
-            <p className="text-xs text-slate-500 mb-3">若上方按鈕沒有反應或跳出錯誤，請在此手動貼上您的 API Key：</p>
+            <p className="text-sm text-slate-300 mb-3 font-medium">手動輸入 API Key：</p>
+            <p className="text-xs text-slate-500 mb-3">若您在新分頁開啟，或上方按鈕沒有反應，請在此手動貼上您的 API Key：</p>
             <div className="flex flex-col gap-2">
               <input
                 type="password"
@@ -1362,7 +1371,18 @@ ${dynamicCharacterMap}
             </div>
           </div>
           
-          {isRawUrl && (
+          {(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
+            <div className="mt-4 pt-4 border-t border-slate-800">
+              <button
+                onClick={() => setIsKeySelected(true)}
+                className="w-full py-2 px-4 bg-transparent hover:bg-slate-800 text-slate-400 hover:text-slate-300 rounded-lg text-sm font-medium transition-colors"
+              >
+                返回使用系統預設金鑰
+              </button>
+            </div>
+          )}
+          
+          {isRawUrl && !(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
             <div className="mt-6 p-4 bg-amber-950/30 border border-amber-900/50 rounded-xl text-left">
               <p className="text-sm text-amber-500 font-medium flex items-center gap-2 mb-1">
                 <AlertCircle className="w-4 h-4" />
@@ -1432,15 +1452,25 @@ ${dynamicCharacterMap}
           </div>
           <div className="flex items-center gap-4">
             <button
+              onClick={() => {
+                setIsKeySelected(false);
+                setIsManualKeyActive(false);
+              }}
+              className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
+            >
+              <Key className="w-4 h-4" />
+              設定 API Key
+            </button>
+            <button
               onClick={() => setShowHistory(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
             >
               <History className="w-4 h-4" />
               歷史紀錄
             </button>
-            <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner">
+            <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner hidden sm:flex">
               <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-              已綁定個人 API Key
+              已綁定 API Key
             </div>
           </div>
         </div>
@@ -1783,7 +1813,7 @@ ${dynamicCharacterMap}
                       <div className="flex-1 overflow-hidden">
                         <div className="font-semibold text-indigo-200 mb-1">AI 偵測翻譯風格：</div>
                         <div className="prose prose-sm prose-invert max-w-none">
-                          <ReactMarkdown>{translationStyle}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{translationStyle}</ReactMarkdown>
                         </div>
                       </div>
                     </div>
@@ -1867,7 +1897,7 @@ ${dynamicCharacterMap}
                   </div>
                 ) : (
                   <div id="translation-result-content" className="prose prose-invert max-w-none prose-headings:font-semibold prose-a:text-blue-400">
-                    <ReactMarkdown>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
                     {(isTranslating || isExtracting) && (
                       <div className="mt-4 flex items-center text-slate-400 text-sm">
                         <Loader2 className="w-4 h-4 animate-spin mr-2 text-blue-500" />
