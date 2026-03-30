@@ -188,6 +188,7 @@ export default function App() {
   const [isCheckingKey, setIsCheckingKey] = useState(true);
   const [manualApiKey, setManualApiKey] = useState('');
   const [isManualKeyActive, setIsManualKeyActive] = useState(false);
+  const [showKeyModal, setShowKeyModal] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [estimatedRemainingTime, setEstimatedRemainingTime] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -239,10 +240,16 @@ export default function App() {
         setIsKeySelected(false);
       } finally {
         setIsCheckingKey(false);
+        // If no key is found after check, show the modal automatically
+        setTimeout(() => {
+          if (!isKeySelected && !isManualKeyActive) {
+            setShowKeyModal(true);
+          }
+        }, 500);
       }
     };
     checkKey();
-  }, []);
+  }, [isKeySelected, isManualKeyActive]);
 
   const handleSelectKey = async () => {
     // @ts-ignore
@@ -1324,86 +1331,6 @@ ${dynamicCharacterMap}
     );
   }
 
-  if (!isKeySelected && !isManualKeyActive) {
-    // @ts-ignore
-    const isRawUrl = typeof window !== 'undefined' && !(window as any).aistudio;
-
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 font-sans">
-        <div className="bg-slate-900 p-8 rounded-2xl shadow-lg shadow-blue-900/10 border border-slate-800 max-w-md w-full text-center">
-          <div className="w-16 h-16 bg-blue-900/30 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
-            <Key className="w-8 h-8" />
-          </div>
-          <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
-          <p className="text-slate-400 mb-6 text-sm leading-relaxed">
-            使用此翻譯工具需要 Google Gemini API Key。您可以透過 AI Studio 自動綁定，或手動輸入您的專屬金鑰。
-          </p>
-          <button
-            onClick={handleSelectKey}
-            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 mb-4"
-          >
-            透過 AI Studio 自動選擇 API Key
-          </button>
-
-          <div className="mt-6 pt-6 border-t border-slate-800 text-left">
-            <p className="text-sm text-slate-300 mb-3 font-medium">手動輸入 API Key：</p>
-            <p className="text-xs text-slate-500 mb-3">若您在新分頁開啟，或上方按鈕沒有反應，請在此手動貼上您的 API Key：</p>
-            <div className="flex flex-col gap-2">
-              <input
-                type="password"
-                placeholder="AIzaSy..."
-                value={manualApiKey}
-                onChange={(e) => setManualApiKey(e.target.value)}
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              />
-              <button
-                onClick={() => {
-                  if (manualApiKey.trim().length > 20) {
-                    setIsManualKeyActive(true);
-                  } else {
-                    showToast("請輸入有效的 Gemini API Key", 'error');
-                  }
-                }}
-                className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-sm font-medium transition-colors"
-              >
-                使用手動輸入的金鑰
-              </button>
-            </div>
-          </div>
-          
-          {(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
-            <div className="mt-4 pt-4 border-t border-slate-800">
-              <button
-                onClick={() => setIsKeySelected(true)}
-                className="w-full py-2 px-4 bg-transparent hover:bg-slate-800 text-slate-400 hover:text-slate-300 rounded-lg text-sm font-medium transition-colors"
-              >
-                返回使用系統預設金鑰
-              </button>
-            </div>
-          )}
-          
-          {isRawUrl && !(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
-            <div className="mt-6 p-4 bg-amber-950/30 border border-amber-900/50 rounded-xl text-left">
-              <p className="text-sm text-amber-500 font-medium flex items-center gap-2 mb-1">
-                <AlertCircle className="w-4 h-4" />
-                網址來源錯誤
-              </p>
-              <p className="text-xs text-amber-400/80 leading-relaxed">
-                偵測到您直接訪問了 <code>.run.app</code> 網址。此環境無法載入 API Key 驗證模組。請改用原作者提供的 <strong>AI Studio 分享連結</strong> (<code>https://ai.studio/share/...</code>) 開啟本網頁。
-              </p>
-            </div>
-          )}
-          
-          <p className="text-xs text-slate-500 mt-6">
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-slate-300">
-              點此前往 Google AI Studio 獲取免費 API Key
-            </a>
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
       {/* Toast Notification */}
@@ -1452,10 +1379,7 @@ ${dynamicCharacterMap}
           </div>
           <div className="flex items-center gap-4">
             <button
-              onClick={() => {
-                setIsKeySelected(false);
-                setIsManualKeyActive(false);
-              }}
+              onClick={() => setShowKeyModal(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
             >
               <Key className="w-4 h-4" />
@@ -2013,6 +1937,101 @@ ${dynamicCharacterMap}
                   確認刪除
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* API Key Modal */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
+            <button 
+              onClick={() => setShowKeyModal(false)}
+              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            
+            <div className="p-8 text-center">
+              <div className="w-16 h-16 bg-blue-900/30 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
+                <Key className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
+              <p className="text-slate-400 mb-6 text-sm leading-relaxed">
+                使用此翻譯工具需要 Google Gemini API Key。您可以透過 AI Studio 自動綁定，或手動輸入您的專屬金鑰。
+              </p>
+              <button
+                onClick={async () => {
+                  await handleSelectKey();
+                  setShowKeyModal(false);
+                }}
+                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 mb-4"
+              >
+                透過 AI Studio 自動選擇 API Key
+              </button>
+
+              <div className="mt-6 pt-6 border-t border-slate-800 text-left">
+                <p className="text-sm text-slate-300 mb-3 font-medium">手動輸入 API Key：</p>
+                <p className="text-xs text-slate-500 mb-3">若您在新分頁開啟，或上方按鈕沒有反應，請在此手動貼上您的 API Key：</p>
+                <div className="flex flex-col gap-2">
+                  <input
+                    type="password"
+                    placeholder="AIzaSy..."
+                    value={manualApiKey}
+                    onChange={(e) => setManualApiKey(e.target.value)}
+                    className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      if (manualApiKey.trim().length > 20) {
+                        setIsManualKeyActive(true);
+                        setShowKeyModal(false);
+                        showToast('已成功套用手動輸入的金鑰', 'success');
+                      } else {
+                        showToast("請輸入有效的 Gemini API Key", 'error');
+                      }
+                    }}
+                    className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    使用手動輸入的金鑰
+                  </button>
+                </div>
+              </div>
+              
+              {(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
+                <div className="mt-4 pt-4 border-t border-slate-800">
+                  <button
+                    onClick={() => {
+                      setIsKeySelected(true);
+                      setIsManualKeyActive(false);
+                      setShowKeyModal(false);
+                    }}
+                    className="w-full py-2 px-4 bg-transparent hover:bg-slate-800 text-slate-400 hover:text-slate-300 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    返回使用系統預設金鑰
+                  </button>
+                </div>
+              )}
+              
+              {/* @ts-ignore */}
+              {typeof window !== 'undefined' && !(window as any).aistudio && !(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
+                <div className="mt-6 p-4 bg-amber-950/30 border border-amber-900/50 rounded-xl text-left">
+                  <p className="text-sm text-amber-500 font-medium flex items-center gap-2 mb-1">
+                    <AlertCircle className="w-4 h-4" />
+                    網址來源錯誤
+                  </p>
+                  <p className="text-xs text-amber-400/80 leading-relaxed">
+                    偵測到您直接訪問了 <code>.run.app</code> 網址。此環境無法載入 API Key 驗證模組。請改用原作者提供的 <strong>AI Studio 分享連結</strong> 開啟本網頁。
+                  </p>
+                </div>
+              )}
+              
+              <p className="text-xs text-slate-500 mt-6">
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-slate-300">
+                  點此前往 Google AI Studio 獲取免費 API Key
+                </a>
+              </p>
             </div>
           </div>
         </div>
