@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 // @ts-ignore
 import html2pdf from 'html2pdf.js/dist/html2pdf.min.js';
-import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock } from 'lucide-react';
+import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock, Info } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -188,6 +188,7 @@ export default function App() {
   const [manualApiKey, setManualApiKey] = useState('');
   const [isManualKeyActive, setIsManualKeyActive] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
+  const [showInfoModal, setShowInfoModal] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [estimatedRemainingTime, setEstimatedRemainingTime] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1329,6 +1330,13 @@ ${dynamicCharacterMap}
           </div>
           <div className="flex items-center gap-4">
             <button
+              onClick={() => setShowInfoModal(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
+            >
+              <Info className="w-4 h-4" />
+              系統說明
+            </button>
+            <button
               onClick={() => setShowKeyModal(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
             >
@@ -1889,6 +1897,97 @@ ${dynamicCharacterMap}
                   確認刪除
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Info Modal */}
+      {showInfoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-slate-800 bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-600/20 p-2 rounded-xl border border-blue-500/30">
+                  <Info className="w-5 h-5 text-blue-400" />
+                </div>
+                <h2 className="text-xl font-semibold text-slate-100">系統說明與翻譯流程</h2>
+              </div>
+              <button 
+                onClick={() => setShowInfoModal(false)}
+                className="text-slate-400 hover:text-slate-200 transition-colors p-2 hover:bg-slate-800 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto custom-scrollbar space-y-8 text-slate-300">
+              <section>
+                <h3 className="text-lg font-medium text-slate-100 mb-3 flex items-center gap-2">
+                  <div className="w-1.5 h-4 bg-blue-500 rounded-full"></div>
+                  核心功能
+                </h3>
+                <ul className="list-disc list-inside space-y-2 text-sm leading-relaxed ml-2">
+                  <li><strong className="text-slate-200">多格式支援：</strong>支援 PDF 與 Markdown 檔案上傳。</li>
+                  <li><strong className="text-slate-200">智慧排版修復：</strong>自動修復 PDF 斷行問題，還原 Markdown 標題與清單格式。</li>
+                  <li><strong className="text-slate-200">多格式匯出：</strong>支援將翻譯結果匯出為 Markdown、排版優化的 PDF，以及 EPUB 電子書。</li>
+                  <li><strong className="text-slate-200">進度接續：</strong>自動儲存翻譯歷史，支援中斷後接續翻譯。</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-medium text-slate-100 mb-3 flex items-center gap-2">
+                  <div className="w-1.5 h-4 bg-purple-500 rounded-full"></div>
+                  AI 翻譯流程架構
+                </h3>
+                <div className="space-y-4 text-sm leading-relaxed">
+                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                    <h4 className="font-semibold text-purple-400 mb-2">階段一：文字提取與格式修復 (Extraction)</h4>
+                    <p>使用 Web Worker 在背景解析 PDF，並透過 Gemini 模型將碎片化的文字重新排版為連貫的 Markdown 格式，同時強制保留對話換行與引用序號，此階段<strong className="text-slate-200">絕對不進行翻譯</strong>以保留原意。</p>
+                  </div>
+                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                    <h4 className="font-semibold text-purple-400 mb-2">階段二：全域分析與風格建模 (Global Analysis)</h4>
+                    <p>在正式翻譯前，系統會讀取前 50,000 字進行分析，自動提取<strong className="text-slate-200">核心術語表 (Glossary)</strong>、<strong className="text-slate-200">角色圖譜 (Character Map)</strong>，並制定統一的<strong className="text-slate-200">翻譯風格指南</strong>，確保長篇翻譯的語氣與名詞一致。</p>
+                  </div>
+                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                    <h4 className="font-semibold text-purple-400 mb-2">階段三：迭代式分段翻譯 (Iterative Translation)</h4>
+                    <p>將文本切分為每塊 3,500 字的區塊進行翻譯。每次翻譯都會帶入：全域術語表、角色圖譜、前情提要，以及<strong className="text-slate-200">上一段的原文與譯文</strong>，確保上下文完美銜接。</p>
+                  </div>
+                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                    <h4 className="font-semibold text-purple-400 mb-2">階段四：自我校對與動態更新 (Self-Correction)</h4>
+                    <p>初稿完成後，系統會立即進行第二次 AI 調用進行嚴格校對。檢查是否有<strong className="text-slate-200">漏譯、幻覺或超譯</strong>。同時，系統會動態提取本段新出現的術語與劇情，並<strong className="text-slate-200">滾動式更新</strong>到全域術語表中，供下一段使用。</p>
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-lg font-medium text-slate-100 mb-3 flex items-center gap-2">
+                  <div className="w-1.5 h-4 bg-emerald-500 rounded-full"></div>
+                  系統底層參數設定
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
+                    <span className="text-slate-400 block mb-1">區塊大小 (Chunk Size)</span>
+                    <strong className="text-slate-200">3,500 字元</strong>
+                    <p className="text-xs text-slate-500 mt-1">確保 Markdown 格式保留與術語一致性的最佳平衡點。</p>
+                  </div>
+                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
+                    <span className="text-slate-400 block mb-1">提取溫度 (Extraction Temp)</span>
+                    <strong className="text-slate-200">0.1</strong>
+                    <p className="text-xs text-slate-500 mt-1">極低溫度，確保 100% 忠實還原原文，不產生幻覺。</p>
+                  </div>
+                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
+                    <span className="text-slate-400 block mb-1">翻譯溫度 (Translation Temp)</span>
+                    <strong className="text-slate-200">0.2</strong>
+                    <p className="text-xs text-slate-500 mt-1">低溫度，在保持語句通順的同時，嚴格限制超譯。</p>
+                  </div>
+                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
+                    <span className="text-slate-400 block mb-1">校對溫度 (Correction Temp)</span>
+                    <strong className="text-slate-200">0.0</strong>
+                    <p className="text-xs text-slate-500 mt-1">絕對理性，專注於尋找漏譯與格式錯誤，並以 JSON 格式精準輸出。</p>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
