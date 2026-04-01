@@ -27,7 +27,7 @@ const MODELS = [
   { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite (極速)', inputPrice: 0.0375, outputPrice: 0.15 },
 ];
 
-const splitTextIntoChunks = (text: string, maxChunkSize: number = 8000) => {
+const splitTextIntoChunks = (text: string, maxChunkSize: number = 3500) => {
   // 1. First try to split by Markdown headings (H1, H2, H3) to keep sections intact
   const sections = text.split(/(?=\n#{1,3} )/);
   const chunks: string[] = [];
@@ -184,7 +184,6 @@ export default function App() {
     toastTimeoutRef.current = setTimeout(() => setToast(null), 5000);
   };
   const [error, setError] = useState<string | null>(null);
-  const [isKeySelected, setIsKeySelected] = useState(false);
   const [isCheckingKey, setIsCheckingKey] = useState(true);
   const [manualApiKey, setManualApiKey] = useState('');
   const [isManualKeyActive, setIsManualKeyActive] = useState(false);
@@ -209,67 +208,18 @@ export default function App() {
 
   useEffect(() => {
     const checkKey = async () => {
-      try {
-        // Check if environment variable is already available
-        if (process.env.API_KEY || process.env.GEMINI_API_KEY) {
-          setIsKeySelected(true);
-          return;
+      setIsCheckingKey(false);
+      // If no manual key is active, show the modal automatically
+      setTimeout(() => {
+        if (!isManualKeyActive) {
+          setShowKeyModal(true);
         }
-
-        let attempts = 0;
-        // @ts-ignore
-        while (typeof window !== 'undefined' && !window.aistudio && attempts < 10) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          attempts++;
-        }
-
-        // @ts-ignore
-        if (typeof window !== 'undefined' && window.aistudio && window.aistudio.hasSelectedApiKey) {
-          // Add a timeout to prevent hanging in Safari
-          const hasKey = await Promise.race([
-            // @ts-ignore
-            window.aistudio.hasSelectedApiKey(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout checking API key")), 3000))
-          ]);
-          setIsKeySelected(!!hasKey);
-        } else {
-          setIsKeySelected(false);
-        }
-      } catch (e) {
-        console.error("Error checking API key:", e);
-        setIsKeySelected(false);
-      } finally {
-        setIsCheckingKey(false);
-        // If no key is found after check, show the modal automatically
-        setTimeout(() => {
-          if (!isKeySelected && !isManualKeyActive) {
-            setShowKeyModal(true);
-          }
-        }, 500);
-      }
+      }, 500);
     };
     checkKey();
-  }, [isKeySelected, isManualKeyActive]);
+  }, [isManualKeyActive]);
 
-  const handleSelectKey = async () => {
-    // @ts-ignore
-    if (typeof window !== 'undefined' && window.aistudio && window.aistudio.openSelectKey) {
-      try {
-        // Add a timeout to prevent hanging
-        await Promise.race([
-          // @ts-ignore
-          window.aistudio.openSelectKey(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout opening API key dialog")), 5000))
-        ]);
-        setIsKeySelected(true);
-      } catch (e: any) {
-        console.error(e);
-        showToast(`無法開啟 API Key 設定視窗 (${e.message})。\n\n這可能是因為 Safari 的跨網站追蹤防護 (ITP) 阻擋了驗證模組。請嘗試在 Safari 設定中關閉「防止跨網站追蹤」，或改用 Chrome 瀏覽器。`, 'error');
-      }
-    } else {
-      showToast("無法呼叫 API Key 設定視窗。\n\n請注意：您目前可能直接訪問了 .run.app 網址，或者瀏覽器阻擋了跨網站追蹤。請使用 AI Studio 產生的「Share (分享)」連結來開啟此應用程式。", 'error');
-    }
-  };
+  // Removed handleSelectKey as it's AI Studio specific
 
   useEffect(() => {
     if (base64Data && file) {
@@ -332,8 +282,8 @@ export default function App() {
     setIsCalculating(true);
     setError(null);
     try {
-      const apiKey = isManualKeyActive ? manualApiKey : (process.env.API_KEY || process.env.GEMINI_API_KEY);
-      if (!apiKey) throw new Error("API Key 尚未設定");
+      const apiKey = manualApiKey;
+      if (!apiKey || !isManualKeyActive) throw new Error("API Key 尚未設定");
       const ai = new GoogleGenAI({ apiKey });
       
       const fileToUse = currentFile || file;
@@ -436,8 +386,8 @@ export default function App() {
     setEstimatedRemainingTime(null);
     
     try {
-      const apiKey = isManualKeyActive ? manualApiKey : (process.env.API_KEY || process.env.GEMINI_API_KEY);
-      if (!apiKey) throw new Error("API Key 尚未設定");
+      const apiKey = manualApiKey;
+      if (!apiKey || !isManualKeyActive) throw new Error("API Key 尚未設定");
       const ai = new GoogleGenAI({ apiKey });
       
       const fileId = currentFileId || Date.now().toString();
@@ -654,8 +604,8 @@ export default function App() {
       setTranslationStage('translating');
       setStatusMessage('正在準備翻譯...');
       // Gemini 3 has a huge context window, but output is limited to 8192 tokens per request.
-      // 15000 characters is a safe upper bound to ensure the translated output doesn't get truncated.
-      const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 8000) : [fullMarkdown];
+      // 3500 characters is a safe upper bound to ensure the translated output doesn't get truncated and maintains high quality.
+      const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 3500) : [fullMarkdown];
       const translationChunksCount = textChunks.length;
       setTotalChunks(translationChunksCount);
       
@@ -981,7 +931,7 @@ ${dynamicCharacterMap}
 
   const downloadPdf = async () => {
     if (isIframe) {
-      showToast("在 AI Studio 預覽模式下無法下載檔案，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      showToast("在內嵌模式下可能無法下載檔案，請在新分頁開啟以獲得完整功能。", 'error');
       return;
     }
     
@@ -1136,7 +1086,7 @@ ${dynamicCharacterMap}
     const textToCopy = activeTab === 'translate' ? translatedText : extractedText;
     if (!textToCopy) return;
     if (isIframe) {
-      showToast("在 AI Studio 預覽模式下無法複製，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      showToast("在內嵌模式下可能無法複製，請在新分頁開啟以獲得完整功能。", 'error');
       return;
     }
     
@@ -1172,7 +1122,7 @@ ${dynamicCharacterMap}
   const handlePdfToEpub = async () => {
     if (!file) return;
     if (isIframe) {
-      showToast("在 AI Studio 預覽模式下無法下載檔案，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      showToast("在內嵌模式下可能無法下載檔案，請在新分頁開啟以獲得完整功能。", 'error');
       return;
     }
     
@@ -1252,7 +1202,7 @@ ${dynamicCharacterMap}
 
   const downloadEpub = async (textToUse?: string) => {
     if (isIframe) {
-      showToast("在 AI Studio 預覽模式下無法下載檔案，請點擊頂部「在新分頁開啟」以獲得完整功能。", 'error');
+      showToast("在內嵌模式下可能無法下載檔案，請在新分頁開啟以獲得完整功能。", 'error');
       return;
     }
     const text = textToUse || (activeTab === 'translate' ? translatedText : extractedText);
@@ -1356,7 +1306,7 @@ ${dynamicCharacterMap}
             <div className="flex items-start sm:items-center gap-2 text-amber-500 text-sm">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
               <p>
-                <strong>預覽模式限制：</strong> 受限於 AI Studio 的安全機制，<strong className="font-semibold">複製與下載功能可能會失效</strong>。請在新分頁開啟以獲得完整功能。
+                <strong>內嵌模式限制：</strong> 受限於瀏覽器的安全機制，<strong className="font-semibold">複製與下載功能可能會失效</strong>。請在新分頁開啟以獲得完整功能。
               </p>
             </div>
             <a 
@@ -1392,10 +1342,12 @@ ${dynamicCharacterMap}
               <History className="w-4 h-4" />
               歷史紀錄
             </button>
-            <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner hidden sm:flex">
-              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-              已綁定 API Key
-            </div>
+            {isManualKeyActive && (
+              <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner hidden sm:flex">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                已綁定 API Key
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -1959,21 +1911,11 @@ ${dynamicCharacterMap}
               </div>
               <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
               <p className="text-slate-400 mb-6 text-sm leading-relaxed">
-                使用此翻譯工具需要 Google Gemini API Key。您可以透過 AI Studio 自動綁定，或手動輸入您的專屬金鑰。
+                使用此翻譯工具需要 Google Gemini API Key。請手動輸入您的專屬金鑰。
               </p>
-              <button
-                onClick={async () => {
-                  await handleSelectKey();
-                  setShowKeyModal(false);
-                }}
-                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 mb-4"
-              >
-                透過 AI Studio 自動選擇 API Key
-              </button>
 
-              <div className="mt-6 pt-6 border-t border-slate-800 text-left">
-                <p className="text-sm text-slate-300 mb-3 font-medium">手動輸入 API Key：</p>
-                <p className="text-xs text-slate-500 mb-3">若您在新分頁開啟，或上方按鈕沒有反應，請在此手動貼上您的 API Key：</p>
+              <div className="text-left">
+                <p className="text-sm text-slate-300 mb-3 font-medium">請輸入 API Key：</p>
                 <div className="flex flex-col gap-2">
                   <input
                     type="password"
@@ -1992,40 +1934,12 @@ ${dynamicCharacterMap}
                         showToast("請輸入有效的 Gemini API Key", 'error');
                       }
                     }}
-                    className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-sm font-medium transition-colors"
+                    className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50"
                   >
-                    使用手動輸入的金鑰
+                    套用金鑰
                   </button>
                 </div>
               </div>
-              
-              {(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
-                <div className="mt-4 pt-4 border-t border-slate-800">
-                  <button
-                    onClick={() => {
-                      setIsKeySelected(true);
-                      setIsManualKeyActive(false);
-                      setShowKeyModal(false);
-                    }}
-                    className="w-full py-2 px-4 bg-transparent hover:bg-slate-800 text-slate-400 hover:text-slate-300 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    返回使用系統預設金鑰
-                  </button>
-                </div>
-              )}
-              
-              {/* @ts-ignore */}
-              {typeof window !== 'undefined' && !(window as any).aistudio && !(process.env.API_KEY || process.env.GEMINI_API_KEY) && (
-                <div className="mt-6 p-4 bg-amber-950/30 border border-amber-900/50 rounded-xl text-left">
-                  <p className="text-sm text-amber-500 font-medium flex items-center gap-2 mb-1">
-                    <AlertCircle className="w-4 h-4" />
-                    網址來源錯誤
-                  </p>
-                  <p className="text-xs text-amber-400/80 leading-relaxed">
-                    偵測到您直接訪問了 <code>.run.app</code> 網址。此環境無法載入 API Key 驗證模組。請改用原作者提供的 <strong>AI Studio 分享連結</strong> 開啟本網頁。
-                  </p>
-                </div>
-              )}
               
               <p className="text-xs text-slate-500 mt-6">
                 <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-slate-300">
