@@ -77,6 +77,7 @@ const splitTextIntoChunks = (text: string, maxChunkSize: number = 3500) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState<'translate' | 'converter'>('translate');
   const [customTitle, setCustomTitle] = useState('');
+  const [customInstructions, setCustomInstructions] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedText, setExtractedText] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-3.1-flash-lite-preview');
@@ -660,9 +661,10 @@ ${previousTranslatedText}` : ''}
 4. 確保標點符號符合繁體中文規範（如使用全形標點，避免英文逗號誤用）。
 5. 嚴禁「超譯」與「幻覺」：不要為了語句優美而加入原文中不存在的形容詞、副詞或任何描述性內容。保持譯文精簡且 100% 忠於原意。
 6. 嚴格保留原文的 Markdown 格式與分段結構：確保標題、段落、清單等格式與原文完全一致，不要將段落合併（除非是為了修復對話排版，見第9點）。
-7. 純譯文輸出：嚴禁在翻譯結果中保留或夾雜原始語言（如英文）的「句子或段落」，絕對不要輸出「原文+譯文」的雙語對照格式。但【允許且鼓勵】在專有名詞、人名或技術術語的中文翻譯後方，以括號保留英文原文（例如：跳躍 (Jaunt)），以幫助讀者理解。
+7. 純譯文輸出：嚴禁在翻譯結果中保留或夾雜原始語言（如英文）的「句子或段落」，絕對不要輸出「原文+譯文」的雙語對照格式。除了專有名詞後方的括號註釋外，整份輸出必須是純粹的繁體中文。
 8. 雙關語與隱喻處理：請敏銳偵測原文中的雙關語、幽默、隱喻或言外之意。盡可能在譯文中重現對等的修辭效果與雙重語意；若中英文無法完美對應，請以最符合上下文語境的方式進行「意譯」，切勿生硬直譯導致失去原有的文字趣味。
-9. 強制對話換行：這是極度重要的規則！只要遇到人物對話（通常包含在引號內），**必須強制獨立成段（換行）**。即使原文中多個角色的對話、或是對話與敘事描述擠在同一個段落，你也**絕對要主動將它們拆分成不同的段落**。每個角色的對話必須獨立一行，並使用繁體中文標準引號（「」與『』）。`;
+9. 強制對話換行：這是極度重要的規則！只要遇到人物對話（通常包含在引號內），**必須強制獨立成段（換行）**。即使原文中多個角色的對話、或是對話與敘事描述擠在同一個段落，你也**絕對要主動將它們拆分成不同的段落**。每個角色的對話必須獨立一行，並使用繁體中文標準引號（「」與『』）。
+${customInstructions ? `\n【使用者自訂指示 (Custom Instructions)】：\n請嚴格遵守以下由使用者針對此文本提供的特殊翻譯指示：\n${customInstructions}\n` : ''}`;
 
         const promptText = `請翻譯以下文本。
 【待翻譯文本】：
@@ -737,9 +739,10 @@ ${dynamicCharacterMap}
 3. 未遵守現有術語表與角色圖譜。
 4. **幻覺或超譯**：檢查譯文是否加入了原文中不存在的資訊。
 5. **格式檢查**：確保譯文保留了原文所有的 Markdown 標記（如 # 標題、* 列表等）以及正確的分段與換行。
-6. **夾雜原文檢查**：確保初稿中沒有殘留未翻譯的英文「句子或段落」（絕對不可包含雙語對照的段落）。但請【保留】專有名詞、人名或技術術語後方的英文括號註釋（例如：跳躍 (Jaunt)）。如果發現整句或整段未翻譯的英文，請將其翻譯為繁體中文。
+6. **夾雜原文檢查 (極度重要)**：確保初稿中沒有殘留未翻譯的英文「句子或段落」（絕對不可包含雙語對照的段落）。如果發現整句或整段未翻譯的英文，請務必將其翻譯為繁體中文。除了專有名詞的括號註釋外，最終輸出必須是 100% 的繁體中文。
 7. **雙關語與語氣檢查**：確認原文中的雙關語、隱喻或特殊語氣是否被妥善保留並轉化為自然流暢的中文，避免生硬直譯。
 8. **強制對話換行檢查**：這是極度重要的檢查！仔細審視所有對話。如果同一個段落內包含兩個以上角色的對話，或者對話與大段敘事描述擠在一起，**必須強制拆分成多個段落（換行）**。確保每個角色的對話都獨立一行。
+${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完全符合以下使用者自訂指示：\n${customInstructions}\n` : ''}
 請直接提供修正後的「最終完美譯文」。
 
 【任務 2：動態上下文提取】：
@@ -758,7 +761,7 @@ ${dynamicCharacterMap}
                   properties: {
                     correctedTranslation: {
                       type: Type.STRING,
-                      description: "修正後的最終完整譯文。必須嚴格保留原文的 Markdown 格式、標題結構與分段換行，不可合併段落。嚴禁夾雜未翻譯的英文句子或段落，但允許在專有名詞後保留英文括號註釋。"
+                      description: "修正後的最終完整譯文。必須嚴格保留原文的 Markdown 格式、標題結構與分段換行，不可合併段落。嚴禁夾雜未翻譯的英文句子或段落，絕對不可輸出雙語對照，必須是純繁體中文（專有名詞括號註釋除外）。"
                     },
                     newTerms: {
                       type: Type.ARRAY,
@@ -1624,9 +1627,31 @@ ${dynamicCharacterMap}
               </div>
             )}
 
+            {activeTab === 'translate' && (
+              <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+                <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
+                  <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">3</div>
+                  翻譯設定
+                </h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">自訂翻譯指示 (選填)</label>
+                    <textarea 
+                      value={customInstructions}
+                      onChange={(e) => setCustomInstructions(e.target.value)}
+                      placeholder="例如：請將主角的名字翻譯為「約翰」，並保持幽默的語氣..."
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none h-24 custom-scrollbar"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
               <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
-                <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">3</div>
+                <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">
+                  {activeTab === 'translate' ? '4' : '3'}
+                </div>
                 {activeTab === 'translate' ? '開始翻譯' : '開始轉換'}
               </h2>
               
