@@ -85,6 +85,8 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number | null>(null);
+  const [actualInputTokens, setActualInputTokens] = useState(0);
+  const [actualOutputTokens, setActualOutputTokens] = useState(0);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationStage, setTranslationStage] = useState<'extracting' | 'analyzing' | 'translating' | null>(null);
@@ -386,6 +388,8 @@ export default function App() {
     const currentStartTime = Date.now();
     setStartTime(currentStartTime);
     setEstimatedRemainingTime(null);
+    setActualInputTokens(0);
+    setActualOutputTokens(0);
     
     try {
       const apiKey = manualApiKey;
@@ -477,6 +481,11 @@ export default function App() {
                       }
                     });
                     
+                    if (response.usageMetadata) {
+                      setActualInputTokens(prev => prev + (response.usageMetadata?.promptTokenCount || 0));
+                      setActualOutputTokens(prev => prev + (response.usageMetadata?.candidatesTokenCount || 0));
+                    }
+                    
                     results[index] = response.text || '';
                     success = true;
                   } catch (err) {
@@ -534,12 +543,11 @@ export default function App() {
         setStatusMessage('正在提取專業術語、角色關係與分析文本風格...');
         
         try {
-          const [glossaryResponse, styleResponse] = await Promise.all([
-            ai.models.generateContent({
-              model: selectedModel,
-              contents: {
-                parts: [
-                  { text: `你是一位世界級的專業翻譯專家與資深編譯專家，精通各種文體的正體中文翻譯。你不僅擅長長篇小說、技術文件與各類科技、科學領域（如：人工智慧、生物工程、物理學、資訊安全等），更深耕於文學小說、社會科學、歷史、經濟、政治等各類文學與非文學著作。請深度閱讀以下文本，並執行以下任務：
+          const glossaryRequest = ai.models.generateContent({
+            model: selectedModel,
+            contents: {
+              parts: [
+                { text: `你是一位世界級的專業翻譯專家與資深編譯專家，精通各種文體的正體中文翻譯。你不僅擅長長篇小說、技術文件與各類科技、科學領域（如：人工智慧、生物工程、物理學、資訊安全等），更深耕於文學小說、社會科學、歷史、經濟、政治等各類文學與非文學著作。請深度閱讀以下文本，並執行以下任務：
   1. **核心術語提取**：識別文本中的關鍵技術術語、專有名詞。
   2. **角色關係圖 (Character Map)**：提取所有出現的人物名稱、性別、性格特徵、說話語氣以及他們之間的關係。
   3. **全域一致性定義**：為每個項目選定一個最精準、符合繁體中文習慣的譯名。
@@ -555,17 +563,24 @@ export default function App() {
   
   文本內容：
   ${fullMarkdown.substring(0, 50000)}` }
-                ]
-              }
-            }).catch(err => {
-              console.warn("Analysis failed, continuing without it.", err);
-              return { text: '無' };
-            }),
-            ai.models.generateContent({
-              model: selectedModel,
-              contents: {
-                parts: [
-                  { text: `請作為世界級的資深編譯專家與學術編輯，精通文學小說、社會科學、歷史、經濟、政治以及各種科技與科學領域（如：AI、生醫、物理、資安等）之文體，為以下文本制定一份「翻譯風格指南」。請分析：
+              ]
+            }
+          }).then(resp => {
+            if (resp.usageMetadata) {
+              setActualInputTokens(prev => prev + (resp.usageMetadata?.promptTokenCount || 0));
+              setActualOutputTokens(prev => prev + (resp.usageMetadata?.candidatesTokenCount || 0));
+            }
+            return resp;
+          }).catch(err => {
+            console.warn("Analysis failed, continuing without it.", err);
+            return { text: '無' };
+          });
+
+          const styleRequest = ai.models.generateContent({
+            model: selectedModel,
+            contents: {
+              parts: [
+                { text: `請作為世界級的資深編譯專家與學術編輯，精通文學小說、社會科學、歷史、經濟、政治以及各種科技與科學領域（如：AI、生醫、物理、資安等）之文體，為以下文本制定一份「翻譯風格指南」。請分析：
   1. **文本領域與類型**：(如：硬核科幻、浪漫小說、技術文件、學術論文、政治評論、經濟分析、科學研究、技術白皮書)
   2. **敘事視角與語氣**：(如：冷峻的第三人稱、感性的第一人稱、正式客觀、學術嚴謹、技術精確)
   3. **目標受眾與文化背景**：(如：青少年讀者、專業研究員、一般大眾、政策制定者、工程師、科學家)
@@ -575,13 +590,20 @@ export default function App() {
   
   文本內容：
   ${fullMarkdown.substring(0, 30000)}` }
-                ]
-              }
-            }).catch(err => {
-              console.warn("Style analysis failed, continuing with default style.", err);
-              return { text: '一般/通用' };
-            })
-          ]);
+              ]
+            }
+          }).then(resp => {
+            if (resp.usageMetadata) {
+              setActualInputTokens(prev => prev + (resp.usageMetadata?.promptTokenCount || 0));
+              setActualOutputTokens(prev => prev + (resp.usageMetadata?.candidatesTokenCount || 0));
+            }
+            return resp;
+          }).catch(err => {
+            console.warn("Style analysis failed, continuing with default style.", err);
+            return { text: '一般/通用' };
+          });
+
+          const [glossaryResponse, styleResponse] = await Promise.all([glossaryRequest, styleRequest]);
           
           const analysisText = glossaryResponse.text || '';
           const glossaryMatch = analysisText.match(/【術語表】：([\s\S]*?)(?=【角色圖譜】：|$)/);
@@ -691,6 +713,10 @@ ${textChunks[i]}`;
               const text = chunk.text || '';
               currentChunkTranslated += text;
               setTranslatedText(fullTranslatedText + currentChunkTranslated);
+              if (chunk.usageMetadata) {
+                setActualInputTokens(prev => prev + (chunk.usageMetadata?.promptTokenCount || 0));
+                setActualOutputTokens(prev => prev + (chunk.usageMetadata?.candidatesTokenCount || 0));
+              }
             }
 
             // Basic validation for translation: check if output is suspiciously short
@@ -794,6 +820,11 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 
             try {
               const correctionResult = JSON.parse(correctionResponse.text || '{}');
+              
+              if (correctionResponse.usageMetadata) {
+                setActualInputTokens(prev => prev + (correctionResponse.usageMetadata?.promptTokenCount || 0));
+                setActualOutputTokens(prev => prev + (correctionResponse.usageMetadata?.candidatesTokenCount || 0));
+              }
               
               if (correctionResult.missingContentDetected) {
                 console.warn(`Missing content detected in chunk ${i + 1}. Retrying with higher emphasis on completeness.`);
@@ -1274,6 +1305,11 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
   const totalEstimatedCost = estimatedInputCost + estimatedOutputCost;
   const totalEstimatedCostTWD = totalEstimatedCost * 32.5; // 假設匯率 1 USD = 32.5 TWD
 
+  const actualInputCost = (actualInputTokens / 1000000) * selectedModelData.inputPrice;
+  const actualOutputCost = (actualOutputTokens / 1000000) * selectedModelData.outputPrice;
+  const totalActualCost = actualInputCost + actualOutputCost;
+  const totalActualCostTWD = totalActualCost * 32.5;
+
   if (isCheckingKey) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -1600,6 +1636,33 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                           <span>~NT$ {totalEstimatedCostTWD.toFixed(2)}</span>
                         </div>
                       </div>
+                      
+                      {(actualInputTokens > 0 || actualOutputTokens > 0) && (
+                        <div className="pt-4 mt-4 border-t border-slate-700/50 space-y-2">
+                          <h4 className="text-sm font-semibold text-slate-300 flex items-center gap-1.5 mb-2">
+                            <Clock className="w-4 h-4 text-purple-400" />
+                            實際使用量與成本 (即時更新)
+                          </h4>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">實際輸入 Token:</span>
+                            <span className="font-medium text-slate-300">{actualInputTokens.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">實際輸出 Token:</span>
+                            <span className="font-medium text-slate-300">{actualOutputTokens.toLocaleString()}</span>
+                          </div>
+                          <div className="pt-2 mt-2 border-t border-slate-800/50 space-y-1">
+                            <div className="flex justify-between text-blue-400">
+                              <span>實際已產生成本 (USD):</span>
+                              <span className="font-medium">${totalActualCost.toFixed(4)}</span>
+                            </div>
+                            <div className="flex justify-between text-emerald-400">
+                              <span>實際已產生成本 (TWD):</span>
+                              <span className="font-bold">NT$ {totalActualCostTWD.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </div>
