@@ -74,6 +74,20 @@ const splitTextIntoChunks = (text: string, maxChunkSize: number = 3500) => {
   return chunks;
 };
 
+const LOCAL_STORAGE_KEY_NAME = '__pdf_translator_api_key_v1__';
+
+const encryptKey = (key: string) => {
+  return window.btoa(key.split('').reverse().join(''));
+};
+
+const decryptKey = (key: string) => {
+  try {
+    return window.atob(key).split('').reverse().join('');
+  } catch (e) {
+    return '';
+  }
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'translate' | 'converter'>('translate');
   const [customTitle, setCustomTitle] = useState('');
@@ -187,9 +201,15 @@ export default function App() {
     toastTimeoutRef.current = setTimeout(() => setToast(null), 5000);
   };
   const [error, setError] = useState<string | null>(null);
-  const [isCheckingKey, setIsCheckingKey] = useState(true);
-  const [manualApiKey, setManualApiKey] = useState('');
-  const [isManualKeyActive, setIsManualKeyActive] = useState(false);
+  const [manualApiKey, setManualApiKey] = useState(() => {
+    const saved = localStorage.getItem(LOCAL_STORAGE_KEY_NAME);
+    return saved ? decryptKey(saved) : '';
+  });
+  const [isManualKeyActive, setIsManualKeyActive] = useState(() => {
+    const saved = localStorage.getItem(LOCAL_STORAGE_KEY_NAME);
+    const key = saved ? decryptKey(saved) : '';
+    return key.length > 20;
+  });
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
@@ -209,19 +229,6 @@ export default function App() {
       pdfWorkerRef.current?.terminate();
     };
   }, []);
-
-  useEffect(() => {
-    const checkKey = async () => {
-      setIsCheckingKey(false);
-      // If no manual key is active, show the modal automatically
-      setTimeout(() => {
-        if (!isManualKeyActive) {
-          setShowKeyModal(true);
-        }
-      }, 500);
-    };
-    checkKey();
-  }, [isManualKeyActive]);
 
   // Removed handleSelectKey as it's AI Studio specific
 
@@ -1310,17 +1317,6 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
   const totalActualCost = actualInputCost + actualOutputCost;
   const totalActualCostTWD = totalActualCost * 32.5;
 
-  if (isCheckingKey) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-slate-400">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-          <p className="text-sm font-medium">正在驗證環境...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
       {/* Toast Notification */}
@@ -2113,22 +2109,34 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   />
                   <button
                     onClick={() => {
-                      if (manualApiKey.trim().length > 20) {
-                        setIsManualKeyActive(true);
+                      const trimmedKey = manualApiKey.trim();
+                      if (trimmedKey === '') {
+                        localStorage.removeItem(LOCAL_STORAGE_KEY_NAME);
+                        setIsManualKeyActive(false);
+                        setManualApiKey('');
                         setShowKeyModal(false);
-                        showToast('已成功套用手動輸入的金鑰', 'success');
+                        showToast('已清除儲存的 API Key', 'success');
+                      } else if (trimmedKey.length > 20) {
+                        localStorage.setItem(LOCAL_STORAGE_KEY_NAME, encryptKey(trimmedKey));
+                        setIsManualKeyActive(true);
+                        setManualApiKey(trimmedKey);
+                        setShowKeyModal(false);
+                        showToast('已安全儲存並套用金鑰', 'success');
                       } else {
                         showToast("請輸入有效的 Gemini API Key", 'error');
                       }
                     }}
                     className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50"
                   >
-                    套用金鑰
+                    儲存並套用
                   </button>
                 </div>
               </div>
               
-              <p className="text-xs text-slate-500 mt-6">
+              <p className="text-xs text-slate-500 mt-6 mb-2">
+                提示：若想清空儲存的金鑰，請將輸入框留空並點擊「儲存並套用」。金鑰會以輕度加密的形式僅儲存於您的瀏覽器中。
+              </p>
+              <p className="text-xs text-slate-500">
                 <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-slate-300">
                   點此前往 Google AI Studio 獲取免費 API Key
                 </a>
