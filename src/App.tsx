@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
+import OpenAI from 'openai';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 // @ts-ignore
@@ -22,9 +23,12 @@ const uint8ArrayToBase64 = (bytes: Uint8Array) => {
 };
 
 const MODELS = [
-  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (最強品質)', inputPrice: 1.25, outputPrice: 5.00 },
-  { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash (推薦)', inputPrice: 0.075, outputPrice: 0.30 },
-  { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite (極速)', inputPrice: 0.0375, outputPrice: 0.15 },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (最強品質)', provider: 'google', inputPrice: 1.25, outputPrice: 5.00 },
+  { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash (推薦)', provider: 'google', inputPrice: 0.075, outputPrice: 0.30 },
+  { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite (極速)', provider: 'google', inputPrice: 0.0375, outputPrice: 0.15 },
+  { id: 'gpt-5.4-nano', name: 'GPT 5.4 Nano (OpenAI 極速)', provider: 'openai', inputPrice: 0.05, outputPrice: 0.20 },
+  { id: 'gpt-5.4-mini', name: 'GPT 5.4 Mini (OpenAI 推薦)', provider: 'openai', inputPrice: 0.15, outputPrice: 0.60 },
+  { id: 'gpt-5.4-pro', name: 'GPT 5.4 Pro (OpenAI 最強)', provider: 'openai', inputPrice: 2.50, outputPrice: 10.00 },
 ];
 
 const splitTextIntoChunks = (text: string, maxChunkSize: number = 3500) => {
@@ -75,6 +79,7 @@ const splitTextIntoChunks = (text: string, maxChunkSize: number = 3500) => {
 };
 
 const LOCAL_STORAGE_KEY_NAME = '__pdf_translator_api_key_v1__';
+const LOCAL_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_v1__';
 
 const encryptKey = (key: string) => {
   return window.btoa(key.split('').reverse().join(''));
@@ -210,6 +215,15 @@ export default function App() {
     const key = saved ? decryptKey(saved) : '';
     return key.length > 20;
   });
+  const [manualOpenaiApiKey, setManualOpenaiApiKey] = useState(() => {
+    const saved = localStorage.getItem(LOCAL_STORAGE_OPENAI_KEY_NAME);
+    return saved ? decryptKey(saved) : '';
+  });
+  const [isOpenaiKeyActive, setIsOpenaiKeyActive] = useState(() => {
+    const saved = localStorage.getItem(LOCAL_STORAGE_OPENAI_KEY_NAME);
+    const key = saved ? decryptKey(saved) : '';
+    return key.length > 10;
+  });
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
@@ -237,6 +251,114 @@ export default function App() {
       calculateTokens(base64Data, selectedModel, file);
     }
   }, [selectedModel, base64Data, file]);
+
+  const generateContentWrapper = async (options: {
+    model: string,
+    systemInstruction?: string,
+    promptText?: string,
+    base64Pdf?: string,
+    temperature?: number,
+    jsonMode?: boolean
+  }) => {
+    const selectedModelData = MODELS.find(m => m.id === options.model)!;
+    if (selectedModelData.provider === 'google') {
+      const apiKey = manualApiKey;
+      if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
+      const ai = new GoogleGenAI({ apiKey });
+      const requestOptions: any = {
+          model: options.model,
+          contents: { parts: [] },
+          config: { temperature: options.temperature !== undefined ? options.temperature : 0.1 }
+      };
+      if (options.systemInstruction) requestOptions.config.systemInstruction = options.systemInstruction;
+      if (options.jsonMode) requestOptions.config.responseMimeType = "application/json";
+      
+      if (options.base64Pdf) {
+          requestOptions.contents.parts.push({ inlineData: { data: options.base64Pdf, mimeType: 'application/pdf' } });
+      }
+      if (options.promptText) {
+          requestOptions.contents.parts.push({ text: options.promptText });
+      }
+      
+      const response = await ai.models.generateContent(requestOptions);
+      return {
+          text: response.text || '',
+          usageMetadata: response.usageMetadata
+      };
+    } else {
+      const apiKey = manualOpenaiApiKey;
+      if (!apiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
+      const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+      const messages: any[] = [];
+      if (options.systemInstruction) messages.push({ role: "system", content: options.systemInstruction });
+      if (options.base64Pdf) {
+          throw new Error("OpenAI 模型不支援直接讀取 PDF 掃描檔。請確認檔案是可以選取文字的 PDF 或 Markdown，或是先改用 Gemini 模型進行。");
+      }
+      if (options.promptText) messages.push({ role: "user", content: options.promptText });
+      
+      const response = await openai.chat.completions.create({
+          model: options.model,
+          messages,
+          temperature: options.temperature !== undefined ? options.temperature : 0.1,
+          response_format: options.jsonMode ? { type: "json_object" } : undefined
+      });
+      return {
+          text: response.choices[0].message.content || '',
+          usageMetadata: {
+              promptTokenCount: response.usage?.prompt_tokens || 0,
+              candidatesTokenCount: response.usage?.completion_tokens || 0
+          }
+      };
+    }
+  };
+
+  const generateContentStreamWrapper = async function*(options: {
+    model: string,
+    systemInstruction?: string,
+    promptText: string,
+    temperature?: number
+  }) {
+    const selectedModelData = MODELS.find(m => m.id === options.model)!;
+    if (selectedModelData.provider === 'google') {
+      const apiKey = manualApiKey;
+      if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
+      const ai = new GoogleGenAI({ apiKey });
+      const responseStream = await ai.models.generateContentStream({
+          model: options.model,
+          contents: { parts: [{ text: options.promptText }] },
+          config: { 
+            systemInstruction: options.systemInstruction, 
+            temperature: options.temperature !== undefined ? options.temperature : 0.2 
+          }
+      });
+      for await (const chunk of responseStream) {
+          yield { 
+            text: chunk.text || '', 
+            usageMetadata: chunk.usageMetadata 
+          };
+      }
+    } else {
+      const apiKey = manualOpenaiApiKey;
+      if (!apiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
+      const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+      const stream = await openai.chat.completions.create({
+          model: options.model,
+          messages: [
+              ...(options.systemInstruction ? [{ role: "system" as const, content: options.systemInstruction }] : []),
+              { role: "user" as const, content: options.promptText }
+          ],
+          temperature: options.temperature !== undefined ? options.temperature : 0.2,
+          stream: true,
+          stream_options: { include_usage: true }
+      });
+      for await (const chunk of stream) {
+          yield { 
+              text: chunk.choices?.[0]?.delta?.content || '', 
+              usageMetadata: chunk.usage ? { promptTokenCount: chunk.usage.prompt_tokens, candidatesTokenCount: chunk.usage.completion_tokens } : undefined
+          };
+      }
+    }
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -293,12 +415,29 @@ export default function App() {
     setIsCalculating(true);
     setError(null);
     try {
+      const selectedModelData = MODELS.find(m => m.id === modelId)!;
+      const fileToUse = currentFile || file;
+      if (!fileToUse) throw new Error("File not found");
+
+      if (selectedModelData.provider === 'openai') {
+        if (!manualOpenaiApiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
+        let totalTokens = 0;
+        const isMd = fileToUse.name.toLowerCase().endsWith('.md');
+        if (isMd) {
+          const text = await fileToUse.text();
+          totalTokens = Math.ceil(text.length * 0.4);
+          setTokenCount(Math.round(totalTokens * 20));
+        } else {
+          totalTokens = Math.ceil(fileToUse.size / 4);
+          setTokenCount(Math.round(totalTokens * 20));
+        }
+        setIsCalculating(false);
+        return;
+      }
+
       const apiKey = manualApiKey;
       if (!apiKey || !isManualKeyActive) throw new Error("API Key 尚未設定");
       const ai = new GoogleGenAI({ apiKey });
-      
-      const fileToUse = currentFile || file;
-      if (!fileToUse) throw new Error("File not found");
       
       let totalTokens = 0;
       const isMd = fileToUse.name.toLowerCase().endsWith('.md');
@@ -467,25 +606,22 @@ export default function App() {
 
                 while (!success && retries < MAX_RETRIES) {
                   try {
-                    const parts: any[] = [];
+                    let promptText = "";
                     let systemInstruction = "";
-                    
                     if (hasRawText) {
                       systemInstruction = "You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
-                      parts.push({ text: `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n4. **絕對不要翻譯**：保持原始語言。\n5. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${rawText}` });
+                      promptText = `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n4. **絕對不要翻譯**：保持原始語言。\n5. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${rawText}`;
                     } else {
                       systemInstruction = "You are a precise OCR, text extraction, and repair tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
-                      parts.push({ inlineData: { data: base64, mimeType: 'application/pdf' } });
-                      parts.push({ text: '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n4. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n5. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n6. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。' });
+                      promptText = '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n4. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n5. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n6. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。';
                     }
 
-                    const response = await ai.models.generateContent({
+                    const response = await generateContentWrapper({
                       model: selectedModel,
-                      contents: { parts },
-                      config: {
-                        systemInstruction,
-                        temperature: 0.1,
-                      }
+                      systemInstruction,
+                      promptText,
+                      base64Pdf: hasRawText ? undefined : base64,
+                      temperature: 0.1
                     });
                     
                     if (response.usageMetadata) {
@@ -550,11 +686,9 @@ export default function App() {
         setStatusMessage('正在提取專業術語、角色關係與分析文本風格...');
         
         try {
-          const glossaryRequest = ai.models.generateContent({
+          const glossaryRequest = generateContentWrapper({
             model: selectedModel,
-            contents: {
-              parts: [
-                { text: `你是一位世界級的專業翻譯專家與資深編譯專家，精通各種文體的正體中文翻譯。你不僅擅長長篇小說、技術文件與各類科技、科學領域（如：人工智慧、生物工程、物理學、資訊安全等），更深耕於文學小說、社會科學、歷史、經濟、政治等各類文學與非文學著作。請深度閱讀以下文本，並執行以下任務：
+            promptText: `你是一位世界級的專業翻譯專家與資深編譯專家，精通各種文體的正體中文翻譯。你不僅擅長長篇小說、技術文件與各類科技、科學領域（如：人工智慧、生物工程、物理學、資訊安全等），更深耕於文學小說、社會科學、歷史、經濟、政治等各類文學與非文學著作。請深度閱讀以下文本，並執行以下任務：
   1. **核心術語提取**：識別文本中的關鍵技術術語、專有名詞。
   2. **角色關係圖 (Character Map)**：提取所有出現的人物名稱、性別、性格特徵、說話語氣以及他們之間的關係。
   3. **全域一致性定義**：為每個項目選定一個最精準、符合繁體中文習慣的譯名。
@@ -569,9 +703,7 @@ export default function App() {
   不要輸出任何開頭、結尾 or 解釋性文字。
   
   文本內容：
-  ${fullMarkdown.substring(0, 50000)}` }
-              ]
-            }
+  ${fullMarkdown.substring(0, 50000)}`
           }).then(resp => {
             if (resp.usageMetadata) {
               setActualInputTokens(prev => prev + (resp.usageMetadata?.promptTokenCount || 0));
@@ -583,11 +715,9 @@ export default function App() {
             return { text: '無' };
           });
 
-          const styleRequest = ai.models.generateContent({
+          const styleRequest = generateContentWrapper({
             model: selectedModel,
-            contents: {
-              parts: [
-                { text: `請作為世界級的資深編譯專家與學術編輯，精通文學小說、社會科學、歷史、經濟、政治以及各種科技與科學領域（如：AI、生醫、物理、資安等）之文體，為以下文本制定一份「翻譯風格指南」。請分析：
+            promptText: `請作為世界級的資深編譯專家與學術編輯，精通文學小說、社會科學、歷史、經濟、政治以及各種科技與科學領域（如：AI、生醫、物理、資安等）之文體，為以下文本制定一份「翻譯風格指南」。請分析：
   1. **文本領域與類型**：(如：硬核科幻、浪漫小說、技術文件、學術論文、政治評論、經濟分析、科學研究、技術白皮書)
   2. **敘事視角與語氣**：(如：冷峻的第三人稱、感性的第一人稱、正式客觀、學術嚴謹、技術精確)
   3. **目標受眾與文化背景**：(如：青少年讀者、專業研究員、一般大眾、政策制定者、工程師、科學家)
@@ -596,9 +726,7 @@ export default function App() {
   請簡潔地列出風格指南。
   
   文本內容：
-  ${fullMarkdown.substring(0, 30000)}` }
-              ]
-            }
+  ${fullMarkdown.substring(0, 30000)}`
           }).then(resp => {
             if (resp.usageMetadata) {
               setActualInputTokens(prev => prev + (resp.usageMetadata?.promptTokenCount || 0));
@@ -703,17 +831,11 @@ ${textChunks[i]}`;
           try {
             // Step 1: Draft Translation (Streaming)
             setStatusMessage(`正在翻譯初稿 (第 ${i + 1}/${translationChunksCount} 部分)...`);
-            const responseStream = await ai.models.generateContentStream({
+            const responseStream = generateContentStreamWrapper({
               model: selectedModel,
-              contents: {
-                parts: [
-                  { text: promptText }
-                ]
-              },
-              config: {
-                systemInstruction,
-                temperature: 0.2,
-              }
+              systemInstruction,
+              promptText,
+              temperature: 0.2
             });
             
             for await (const chunk of responseStream) {
@@ -747,11 +869,9 @@ ${textChunks[i]}`;
             // Step 2: Self-Correction & Context Update
             setStatusMessage(`正在自我校對與更新術語 (第 ${i + 1}/${translationChunksCount} 部分)...`);
             
-            const correctionResponse = await ai.models.generateContent({
+            const correctionResponse = await generateContentWrapper({
               model: selectedModel,
-              contents: {
-                parts: [
-                  { text: `請對以下翻譯進行嚴格的自我校對，並提取新出現的專有名詞與劇情發展。
+              promptText: `請對以下翻譯進行嚴格的自我校對，並提取新出現的專有名詞與劇情發展。
 
 【原文】：
 ${textChunks[i]}
@@ -784,45 +904,17 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 2. **新角色/角色發展**：新出現的角色或現有角色的新資訊（如性別、新關係）。
 3. **劇情摘要**：用 50 字內簡述本段發生的關鍵劇情。
 
-請以 JSON 格式回傳。` }
-                ]
-              },
-              config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    correctedTranslation: {
-                      type: Type.STRING,
-                      description: "修正後的最終完整譯文。必須嚴格保留原文的 Markdown 格式、標題結構與分段換行，不可合併段落。嚴禁夾雜未翻譯的英文句子或段落，絕對不可輸出雙語對照，必須是純繁體中文（專有名詞括號註釋除外）。"
-                    },
-                    newTerms: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                      description: "新提取的術語列表"
-                    },
-                    newCharacters: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                      description: "新提取的角色資訊"
-                    },
-                    chunkSummary: {
-                      type: Type.STRING,
-                      description: "本段劇情的極簡摘要"
-                    },
-                    foundHallucinations: {
-                      type: Type.BOOLEAN,
-                      description: "是否在初稿中發現了原文不存在的超譯或幻覺內容"
-                    },
-                    missingContentDetected: {
-                      type: Type.BOOLEAN,
-                      description: "是否在初稿中發現了漏譯（未翻譯的句子或段落）"
-                    }
-                  },
-                  required: ["correctedTranslation", "newTerms", "newCharacters", "chunkSummary", "foundHallucinations", "missingContentDetected"]
-                },
-                temperature: 0,
-              }
+請務必以 JSON 格式回傳，格式如下：
+{
+  "correctedTranslation": "修正後的最終完整譯文。必須嚴格保留原文的 Markdown 格式、標題結構與分段換行，不可合併段落。禁止包含未翻譯英文。純繁中輸出。",
+  "newTerms": ["- [英文]: [中文]"],
+  "newCharacters": ["- [角色名]: [描述]"],
+  "chunkSummary": "本段劇情的極簡摘要",
+  "foundHallucinations": true 或 false,
+  "missingContentDetected": true 或 false
+}`,
+              temperature: 0,
+              jsonMode: true
             });
 
             try {
@@ -1421,33 +1513,74 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">1</div>
                   選擇模型
                 </h2>
-                <div className="space-y-3">
-                  {MODELS.map(model => (
-                    <label 
-                      key={model.id}
-                      className={`flex items-start p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
-                        selectedModel === model.id 
-                          ? 'border-blue-500 bg-blue-900/20 shadow-[0_0_10px_rgba(37,99,235,0.1)]' 
-                          : 'border-slate-800 hover:border-blue-500/50 hover:bg-slate-800/50'
-                      }`}
-                    >
-                      <input 
-                        type="radio" 
-                        name="model" 
-                        value={model.id}
-                        checked={selectedModel === model.id}
-                        onChange={(e) => setSelectedModel(e.target.value)}
-                        className="mt-1 text-blue-500 focus:ring-blue-500 bg-slate-950 border-slate-700"
-                      />
-                      <div className="ml-3">
-                        <div className="font-medium text-slate-200">{model.name}</div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          輸入: ${model.inputPrice}/1M tokens<br/>
-                          輸出: ${model.outputPrice}/1M tokens
-                        </div>
-                      </div>
-                    </label>
-                  ))}
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-sm font-semibold text-blue-400 mb-2 pl-1">
+                      Google Gemini 模型
+                    </h3>
+                    <div className="space-y-3">
+                      {MODELS.filter(m => m.provider === 'google').map(model => (
+                        <label 
+                          key={model.id}
+                          className={`flex items-start p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
+                            selectedModel === model.id 
+                              ? 'border-blue-500 bg-blue-900/20 shadow-[0_0_10px_rgba(37,99,235,0.1)]' 
+                              : 'border-slate-800 hover:border-blue-500/50 hover:bg-slate-800/50'
+                          }`}
+                        >
+                          <input 
+                            type="radio" 
+                            name="model" 
+                            value={model.id}
+                            checked={selectedModel === model.id}
+                            onChange={(e) => setSelectedModel(e.target.value)}
+                            className="mt-1 text-blue-500 focus:ring-blue-500 bg-slate-950 border-slate-700"
+                          />
+                          <div className="ml-3">
+                            <div className="font-medium text-slate-200">{model.name}</div>
+                            <div className="text-xs text-slate-500 mt-0.5">
+                              輸入: ${model.inputPrice}/1M tokens<br/>
+                              輸出: ${model.outputPrice}/1M tokens
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-sm font-semibold text-emerald-400 mb-2 pl-1">
+                      OpenAI GPT 模型
+                    </h3>
+                    <div className="space-y-3">
+                      {MODELS.filter(m => m.provider === 'openai').map(model => (
+                        <label 
+                          key={model.id}
+                          className={`flex items-start p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
+                            selectedModel === model.id 
+                              ? 'border-emerald-500 bg-emerald-900/20 shadow-[0_0_10px_rgba(16,185,129,0.1)]' 
+                              : 'border-slate-800 hover:border-emerald-500/50 hover:bg-slate-800/50'
+                          }`}
+                        >
+                          <input 
+                            type="radio" 
+                            name="model" 
+                            value={model.id}
+                            checked={selectedModel === model.id}
+                            onChange={(e) => setSelectedModel(e.target.value)}
+                            className="mt-1 text-emerald-500 focus:ring-emerald-500 bg-slate-950 border-slate-700"
+                          />
+                          <div className="ml-3">
+                            <div className="font-medium text-slate-200">{model.name}</div>
+                            <div className="text-xs text-slate-500 mt-0.5">
+                              輸入: ${model.inputPrice}/1M tokens<br/>
+                              輸出: ${model.outputPrice}/1M tokens
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

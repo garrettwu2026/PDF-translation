@@ -27,6 +27,7 @@
     "lucide-react": "^0.546.0",
     "marked": "^17.0.5",
     "motion": "^12.23.24",
+    "openai": "^6.35.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.5.207",
     "react": "^19.0.0",
