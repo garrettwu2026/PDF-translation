@@ -1413,7 +1413,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
       {/* Toast Notification */}
       {toast && (
-        <div key={toast.id} className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 print:hidden ${
+        <div key={toast.id} className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 w-[calc(100%-2rem)] sm:w-auto max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 print:hidden ${
           toast.type === 'success' ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-900/50 backdrop-blur-sm' : 'bg-red-950/80 text-red-400 border border-red-900/50 backdrop-blur-sm'
         }`}>
           {toast.type === 'success' ? (
@@ -1421,8 +1421,10 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
           ) : (
             <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
           )}
-          <p className="text-sm font-medium leading-relaxed whitespace-pre-wrap">{toast.message}</p>
-          <button onClick={() => setToast(null)} className="ml-auto text-slate-500 hover:text-slate-300 transition-colors">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium leading-relaxed whitespace-pre-wrap break-words">{toast.message}</p>
+          </div>
+          <button onClick={() => setToast(null)} className="ml-2 shrink-0 text-slate-500 hover:text-slate-300 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -1925,7 +1927,9 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               {error && (
                 <div className="mt-4 p-3 bg-red-950/30 border border-red-900/50 text-red-400 rounded-lg text-sm flex items-start gap-2">
                   <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                  <p>{error}</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="break-words whitespace-pre-wrap">{error}</p>
+                  </div>
                 </div>
               )}
             </div>
@@ -2145,6 +2149,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   核心功能
                 </h3>
                 <ul className="list-disc list-inside space-y-2 text-sm leading-relaxed ml-2">
+                  <li><strong className="text-slate-200">多模型支援：</strong>整合 Google Gemini 與 OpenAI GPT 雙生態系，提供多樣化的頂級 AI 模型選擇。</li>
                   <li><strong className="text-slate-200">多格式支援：</strong>支援 PDF 與 Markdown 檔案上傳。</li>
                   <li><strong className="text-slate-200">智慧排版修復：</strong>自動修復 PDF 斷行問題，還原 Markdown 標題與清單格式。</li>
                   <li><strong className="text-slate-200">多格式匯出：</strong>支援將翻譯結果匯出為 Markdown、排版優化的 PDF，以及 EPUB 電子書。</li>
@@ -2227,37 +2232,81 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               </div>
               <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
               <p className="text-slate-400 mb-6 text-sm leading-relaxed">
-                使用此翻譯工具需要 Google Gemini API Key。請手動輸入您的專屬金鑰。
+                使用此翻譯工具需要設定對應的 API Key。金鑰會安全加密儲存於瀏覽器本地，請放心使用。
               </p>
 
-              <div className="text-left">
-                <p className="text-sm text-slate-300 mb-3 font-medium">請輸入 API Key：</p>
-                <div className="flex flex-col gap-2">
+              <div className="text-left space-y-4">
+                <div>
+                  <p className="text-sm text-slate-300 mb-2 font-medium flex justify-between">
+                    <span>Google Gemini API Key：</span>
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs text-blue-400 hover:text-blue-300 underline">獲取金鑰</a>
+                  </p>
                   <input
                     type="password"
                     placeholder="AIzaSy..."
                     value={manualApiKey}
                     onChange={(e) => setManualApiKey(e.target.value)}
-                    className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
                   />
+                </div>
+
+                <div>
+                  <p className="text-sm text-slate-300 mb-2 font-medium flex justify-between">
+                    <span>OpenAI API Key (選填)：</span>
+                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-xs text-emerald-400 hover:text-emerald-300 underline">獲取金鑰</a>
+                  </p>
+                  <input
+                    type="password"
+                    placeholder="sk-proj-..."
+                    value={manualOpenaiApiKey}
+                    onChange={(e) => setManualOpenaiApiKey(e.target.value)}
+                    className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-colors"
+                  />
+                </div>
+
+                <div className="pt-4">
                   <button
                     onClick={() => {
-                      const trimmedKey = manualApiKey.trim();
-                      if (trimmedKey === '') {
+                      const trimmedGoogle = manualApiKey.trim();
+                      const trimmedOpenai = manualOpenaiApiKey.trim();
+                      let hasError = false;
+
+                      // Set Google
+                      if (trimmedGoogle === '') {
                         localStorage.removeItem(LOCAL_STORAGE_KEY_NAME);
                         setIsManualKeyActive(false);
                         setManualApiKey('');
-                        setShowKeyModal(false);
-                        showToast('已清除儲存的 API Key', 'success');
-                      } else if (trimmedKey.length > 20) {
-                        localStorage.setItem(LOCAL_STORAGE_KEY_NAME, encryptKey(trimmedKey));
+                      } else if (trimmedGoogle.length > 20) {
+                        localStorage.setItem(LOCAL_STORAGE_KEY_NAME, encryptKey(trimmedGoogle));
                         setIsManualKeyActive(true);
-                        setManualApiKey(trimmedKey);
-                        setShowKeyModal(false);
-                        showToast('已安全儲存並套用金鑰', 'success');
+                        setManualApiKey(trimmedGoogle);
                       } else {
-                        showToast("請輸入有效的 Gemini API Key", 'error');
+                        showToast("Google API Key 格式不正確", 'error');
+                        hasError = true;
                       }
+
+                      // Set OpenAI
+                      if (trimmedOpenai === '') {
+                        localStorage.removeItem(LOCAL_STORAGE_OPENAI_KEY_NAME);
+                        setIsOpenaiKeyActive(false);
+                        setManualOpenaiApiKey('');
+                      } else if (trimmedOpenai.length > 10) {
+                        localStorage.setItem(LOCAL_STORAGE_OPENAI_KEY_NAME, encryptKey(trimmedOpenai));
+                        setIsOpenaiKeyActive(true);
+                        setManualOpenaiApiKey(trimmedOpenai);
+                      } else {
+                        showToast("OpenAI API Key 格式不正確", 'error');
+                        hasError = true;
+                      }
+
+                      if (hasError) return;
+
+                      if (trimmedGoogle === '' && trimmedOpenai === '') {
+                        showToast('已清除所有儲存的 API Key', 'success');
+                      } else {
+                        showToast('已安全儲存並套用金鑰', 'success');
+                      }
+                      setShowKeyModal(false);
                     }}
                     className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50"
                   >
@@ -2266,13 +2315,8 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                 </div>
               </div>
               
-              <p className="text-xs text-slate-500 mt-6 mb-2">
+              <p className="text-xs text-slate-500 mt-6 text-center">
                 提示：若想清空儲存的金鑰，請將輸入框留空並點擊「儲存並套用」。金鑰會以輕度加密的形式僅儲存於您的瀏覽器中。
-              </p>
-              <p className="text-xs text-slate-500">
-                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline hover:text-slate-300">
-                  點此前往 Google AI Studio 獲取免費 API Key
-                </a>
               </p>
             </div>
           </div>
