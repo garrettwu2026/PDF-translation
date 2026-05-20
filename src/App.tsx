@@ -24,7 +24,7 @@ const uint8ArrayToBase64 = (bytes: Uint8Array) => {
 
 const MODELS = [
   { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (最強品質)', provider: 'google', inputPrice: 1.25, outputPrice: 5.00 },
-  { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash (推薦)', provider: 'google', inputPrice: 0.075, outputPrice: 0.30 },
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (推薦)', provider: 'google', inputPrice: 1.50, outputPrice: 9.00 },
   { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite (極速)', provider: 'google', inputPrice: 0.0375, outputPrice: 0.15 },
   { id: 'gpt-5.4-nano', name: 'GPT 5.4 Nano (OpenAI 極速)', provider: 'openai', inputPrice: 0.05, outputPrice: 0.20 },
   { id: 'gpt-5.4-mini', name: 'GPT 5.4 Mini (OpenAI 推薦)', provider: 'openai', inputPrice: 0.15, outputPrice: 0.60 },
@@ -762,7 +762,7 @@ export default function App() {
       // --- STAGE 2: TRANSLATION ---
       setTranslationStage('translating');
       setStatusMessage('正在準備翻譯...');
-      // Gemini 3 has a huge context window, but output is limited to 8192 tokens per request.
+      // Gemini 3/3.5 has a huge context window, but output is limited to 8192 tokens per request.
       // 3500 characters is a safe upper bound to ensure the translated output doesn't get truncated and maintains high quality.
       const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 3500) : [fullMarkdown];
       const translationChunksCount = textChunks.length;
