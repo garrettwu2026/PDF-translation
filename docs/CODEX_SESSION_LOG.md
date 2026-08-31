@@ -107,3 +107,19 @@ Decisions and outcome:
 - Moved server rate limiting into a tested module and added periodic stale-client pruning to prevent unbounded memory growth.
 - Expanded automated coverage from 10 to 17 tests.
 - Validation: strict TypeScript, 17 unit tests, and production build passed.
+
+### Repository cleanup, safe diagnostics, and App decomposition
+
+User request:
+
+> Clean up experimental files, remove console logs that might contain document content, and split the main program.
+
+Decisions and outcome:
+
+- Removed 30 tracked experimental scripts and generated EPUB fixtures while preserving the maintained `tests/` suite.
+- Added ignore rules for root test EPUB outputs so generated artifacts are not recommitted.
+- Removed direct logging of source and translated text. Client diagnostics now emit only development-time event codes and non-content metadata.
+- Moved provider calls, API-key storage, complete prompt templates, notifications, and modal UI out of `App.tsx`.
+- Reduced `App.tsx` from 2,369 to 1,917 lines without changing the complete translation and correction prompt rules.
+- Expanded the automated suite from 17 to 21 tests.
+- Validation: strict TypeScript, 21 unit tests, and production build passed.

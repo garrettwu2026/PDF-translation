@@ -20,9 +20,14 @@ The product direction is **professional, friendly, and simple**. The interface s
 
 ## Architecture
 
-- `src/App.tsx`: main React UI and translation workflow
+- `src/App.tsx`: translation workflow orchestration and primary page layout
 - `src/index.css`: Tailwind import, document rendering styles, and application visual system
 - `src/pdf.worker.ts`: background PDF parsing and OCR preparation
+- `src/components/`: reusable preview, notification, history, information, and API-key UI
+- `src/lib/ai-providers.ts`: Gemini/OpenAI request adapters
+- `src/lib/api-key-storage.ts`: session-first browser key persistence
+- `src/lib/diagnostics.ts`: content-safe development-only diagnostic events
+- `src/lib/translation-prompts.ts`: extraction, translation, and correction prompt builders
 - `src/lib/db.ts`: browser IndexedDB translation history
 - `src/lib/text.ts`: safe Markdown chunking and binary conversion utilities
 - `src/lib/file-limits.ts`: shared PDF/Markdown upload and PDF page limits
@@ -81,6 +86,8 @@ npm start
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
 - Do not weaken EPUB sanitization or server request limits.
 - Avoid exposing raw API errors, secrets, or uploaded content in logs.
+- Client diagnostics must use `src/lib/diagnostics.ts`. Never log source text, translated text, prompts, provider bodies, or API keys.
+- Keep experiments outside the tracked source tree. Root `test-*` scripts and generated EPUB fixtures were removed; durable tests belong in `tests/`.
 - Keep desktop and mobile layouts usable.
 
 ## Current UI direction

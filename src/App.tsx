@@ -1,50 +1,34 @@
 import React, { lazy, Suspense, useState, useRef, useEffect } from 'react';
-import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock, Info } from 'lucide-react';
+import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Image as ImageIcon, Clock, Info } from 'lucide-react';
 import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
 import { splitTextIntoChunks } from './lib/text';
 import { assertPdfPageLimit, MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
 import { buildDocumentAnalysisPrompt, parseDocumentAnalysis } from './lib/document-analysis';
 import { calculateTokenCost, DEFAULT_MODEL_ID, estimatePipelineCost, getModelConfig, MODELS } from './lib/models';
+import { reportError, reportWarning } from './lib/diagnostics';
+import { generateContent, generateContentStream, type GenerateContentOptions, type GenerateStreamOptions } from './lib/ai-providers';
+import {
+  LOCAL_STORAGE_KEY_NAME,
+  LOCAL_STORAGE_OPENAI_KEY_NAME,
+  SESSION_STORAGE_KEY_NAME,
+  SESSION_STORAGE_OPENAI_KEY_NAME,
+  persistStoredKey,
+  readStoredKey,
+} from './lib/api-key-storage';
+import {
+  buildCorrectionPrompt,
+  buildExtractionPrompt,
+  buildTranslationPrompt,
+  buildTranslationSystemInstruction,
+  extractionSystemInstruction,
+} from './lib/translation-prompts';
+import AppToast, { type ToastMessage } from './components/AppToast';
+import ApiKeyModal from './components/ApiKeyModal';
+import { DeleteHistoryDialog, HistoryModal } from './components/HistoryDialogs';
+import InfoModal from './components/InfoModal';
 
 const MarkdownPreview = lazy(() => import('./components/MarkdownPreview'));
 const markdownFallback = <div className="text-sm text-slate-500">正在載入預覽...</div>;
-const LOCAL_STORAGE_KEY_NAME = '__pdf_translator_api_key_v1__';
-const LOCAL_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_v1__';
-const SESSION_STORAGE_KEY_NAME = '__pdf_translator_api_key_session_v1__';
-const SESSION_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_session_v1__';
-
-// Encoding only prevents accidental plain-text display in storage tools. It is
-// not encryption; session storage is therefore the safe default.
-const encodeStoredKey = (key: string) => {
-  return window.btoa(key.split('').reverse().join(''));
-};
-
-const decodeStoredKey = (key: string) => {
-  try {
-    return window.atob(key).split('').reverse().join('');
-  } catch (e) {
-    return '';
-  }
-};
-
-const readStoredKey = (sessionName: string, localName: string) => {
-  const saved = sessionStorage.getItem(sessionName) ?? localStorage.getItem(localName);
-  return saved ? decodeStoredKey(saved) : '';
-};
-
-const persistStoredKey = (
-  key: string,
-  sessionName: string,
-  localName: string,
-  rememberOnDevice: boolean,
-) => {
-  sessionStorage.removeItem(sessionName);
-  localStorage.removeItem(localName);
-  if (!key) return;
-  const target = rememberOnDevice ? localStorage : sessionStorage;
-  target.setItem(rememberOnDevice ? localName : sessionName, encodeStoredKey(key));
-};
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<'translate' | 'converter'>('translate');
   const [customTitle, setCustomTitle] = useState('');
@@ -70,7 +54,7 @@ export default function App() {
   const [characterMap, setCharacterMap] = useState<string>('');
   const [plotSummary, setPlotSummary] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState('');
-  const [toast, setToast] = useState<{id: number, message: string, type: 'success' | 'error'} | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   const [autoDownload, setAutoDownload] = useState<'none' | 'epub' | 'pdf' | 'md'>('md');
   const [pendingDownload, setPendingDownload] = useState<'epub' | 'pdf' | 'md' | null>(null);
   const [isIframe, setIsIframe] = useState(false);
@@ -99,7 +83,7 @@ export default function App() {
       const records = await getAllHistory();
       setHistory(records.sort((a, b) => b.timestamp - a.timestamp));
     } catch (e) {
-      console.error("Failed to load history", e);
+      reportError('history_load_failed');
     }
   };
 
@@ -183,12 +167,38 @@ export default function App() {
   const extractionWorkerTaskRef = useRef<string | null>(null);
   const translationCancelledRef = useRef(false);
 
+  const handleSaveApiKeys = () => {
+    const trimmedGoogle = manualApiKey.trim();
+    const trimmedOpenai = manualOpenaiApiKey.trim();
+    if (trimmedGoogle !== '' && trimmedGoogle.length <= 20) {
+      showToast('Google API Key 格式不正確', 'error');
+      return;
+    }
+    if (trimmedOpenai !== '' && trimmedOpenai.length <= 10) {
+      showToast('OpenAI API Key 格式不正確', 'error');
+      return;
+    }
+    persistStoredKey(trimmedGoogle, SESSION_STORAGE_KEY_NAME, LOCAL_STORAGE_KEY_NAME, rememberApiKeys);
+    persistStoredKey(trimmedOpenai, SESSION_STORAGE_OPENAI_KEY_NAME, LOCAL_STORAGE_OPENAI_KEY_NAME, rememberApiKeys);
+    setIsManualKeyActive(trimmedGoogle.length > 20);
+    setIsOpenaiKeyActive(trimmedOpenai.length > 10);
+    setManualApiKey(trimmedGoogle);
+    setManualOpenaiApiKey(trimmedOpenai);
+    showToast(
+      trimmedGoogle === '' && trimmedOpenai === ''
+        ? '已清除所有儲存的 API Key'
+        : rememberApiKeys ? '已在這台裝置記住並套用金鑰' : '已在此分頁工作階段套用金鑰',
+      'success',
+    );
+    setShowKeyModal(false);
+  };
+
   useEffect(() => {
     // Initialize PDF worker
     try {
       pdfWorkerRef.current = new Worker(new URL('./pdf.worker.ts', import.meta.url), { type: 'module' });
     } catch (err) {
-      console.error("Failed to initialize PDF worker:", err);
+      reportError('pdf_worker_initialization_failed');
     }
     
     return () => {
@@ -218,117 +228,14 @@ export default function App() {
     };
   }, [selectedModel, base64Data, file]);
 
-  const generateContentWrapper = async (options: {
-    model: string,
-    systemInstruction?: string,
-    promptText?: string,
-    base64Pdf?: string,
-    temperature?: number,
-    jsonMode?: boolean
-  }) => {
-    const selectedModelData = getModelConfig(options.model);
-    if (selectedModelData.provider === 'google') {
-      const apiKey = manualApiKey;
-      if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
-      const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey });
-      const requestOptions: any = {
-          model: options.model,
-          contents: { parts: [] },
-          config: { temperature: options.temperature !== undefined ? options.temperature : 0.1 }
-      };
-      if (options.systemInstruction) requestOptions.config.systemInstruction = options.systemInstruction;
-      if (options.jsonMode) requestOptions.config.responseMimeType = "application/json";
-      
-      if (options.base64Pdf) {
-          requestOptions.contents.parts.push({ inlineData: { data: options.base64Pdf, mimeType: 'application/pdf' } });
-      }
-      if (options.promptText) {
-          requestOptions.contents.parts.push({ text: options.promptText });
-      }
-      
-      const response = await ai.models.generateContent(requestOptions);
-      return {
-          text: response.text || '',
-          usageMetadata: response.usageMetadata
-      };
-    } else {
-      const apiKey = manualOpenaiApiKey;
-      if (!apiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
-      const { default: OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
-      const messages: any[] = [];
-      if (options.systemInstruction) messages.push({ role: "system", content: options.systemInstruction });
-      if (options.base64Pdf) {
-          throw new Error("OpenAI 模型不支援直接讀取 PDF 掃描檔。請確認檔案是可以選取文字的 PDF 或 Markdown，或是先改用 Gemini 模型進行。");
-      }
-      if (options.promptText) messages.push({ role: "user", content: options.promptText });
-      
-      const response = await openai.chat.completions.create({
-          model: options.model,
-          messages,
-          temperature: options.temperature !== undefined ? options.temperature : 0.1,
-          response_format: options.jsonMode ? { type: "json_object" } : undefined
-      });
-      return {
-          text: response.choices[0].message.content || '',
-          usageMetadata: {
-              promptTokenCount: response.usage?.prompt_tokens || 0,
-              candidatesTokenCount: response.usage?.completion_tokens || 0
-          }
-      };
-    }
-  };
-
-  const generateContentStreamWrapper = async function*(options: {
-    model: string,
-    systemInstruction?: string,
-    promptText: string,
-    temperature?: number
-  }) {
-    const selectedModelData = getModelConfig(options.model);
-    if (selectedModelData.provider === 'google') {
-      const apiKey = manualApiKey;
-      if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
-      const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey });
-      const responseStream = await ai.models.generateContentStream({
-          model: options.model,
-          contents: { parts: [{ text: options.promptText }] },
-          config: { 
-            systemInstruction: options.systemInstruction, 
-            temperature: options.temperature !== undefined ? options.temperature : 0.2 
-          }
-      });
-      for await (const chunk of responseStream) {
-          yield { 
-            text: chunk.text || '', 
-            usageMetadata: chunk.usageMetadata 
-          };
-      }
-    } else {
-      const apiKey = manualOpenaiApiKey;
-      if (!apiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
-      const { default: OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
-      const stream = await openai.chat.completions.create({
-          model: options.model,
-          messages: [
-              ...(options.systemInstruction ? [{ role: "system" as const, content: options.systemInstruction }] : []),
-              { role: "user" as const, content: options.promptText }
-          ],
-          temperature: options.temperature !== undefined ? options.temperature : 0.2,
-          stream: true,
-          stream_options: { include_usage: true }
-      });
-      for await (const chunk of stream) {
-          yield { 
-              text: chunk.choices?.[0]?.delta?.content || '', 
-              usageMetadata: chunk.usage ? { promptTokenCount: chunk.usage.prompt_tokens, candidatesTokenCount: chunk.usage.completion_tokens } : undefined
-          };
-      }
-    }
-  };
+  const providerCredentials = () => ({
+    googleApiKey: isManualKeyActive ? manualApiKey : undefined,
+    openaiApiKey: isOpenaiKeyActive ? manualOpenaiApiKey : undefined,
+  });
+  const generateContentWrapper = (options: GenerateContentOptions) =>
+    generateContent(options, providerCredentials());
+  const generateContentStreamWrapper = (options: GenerateStreamOptions) =>
+    generateContentStream(options, providerCredentials());
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -496,7 +403,7 @@ export default function App() {
       }
     } catch (err: any) {
       if (isCurrentRequest()) {
-        console.error(err);
+        reportError('token_calculation_failed');
         setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
         setTokenCount(null);
       }
@@ -595,7 +502,7 @@ export default function App() {
           await saveHistory(record);
           void loadHistory();
         } catch (historyError) {
-          console.warn('Unable to persist translation progress', historyError);
+          reportWarning('translation_progress_save_failed');
         }
       };
 
@@ -651,15 +558,8 @@ export default function App() {
 
                 while (!success && retries < MAX_RETRIES) {
                   try {
-                    let promptText = "";
-                    let systemInstruction = "";
-                    if (hasRawText) {
-                      systemInstruction = "You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.";
-                      promptText = `你是一個專業的排版與文本修復助手。以下是從 PDF 底層直接提取出來的純文字，可能存在不正常的斷句或格式混亂。請幫我將這些文字重新排版成乾淨、連貫的 Markdown 格式（修復斷行、還原標題層級、合併被錯誤切斷的句子等）。\n\n【特別注意】：\n1. **修復斷句**：確保句子完整且邏輯連貫，修復因 PDF 換行導致的單字或句子中斷。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別引用序號**：PDF 中常有上標的小數字作為註解或引用（如 word¹）。請識別這些數字並確保它們格式清晰（例如使用 [1] 或 ^1），不要讓它們與前面的單字黏在一起。\n4. **絕對不要翻譯**：保持原始語言。\n5. **絕對不要刪減或總結**：必須 100% 保留所有原始文字。\n\n原始文字：\n${rawText}`;
-                    } else {
-                      systemInstruction = "You are a precise OCR, text extraction, and repair tool. Your ONLY job is to extract the exact text from the provided PDF pages and format it as clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Identify superscript numbers used for citations or footnotes and format them as [n] or ^n. DO NOT translate the text. Extract it in its ORIGINAL LANGUAGE. DO NOT summarize, DO NOT skip any content.";
-                      promptText = '你是一個精準的 OCR、文字提取與修復工具。你的「唯一」任務是將這份 PDF 文件中的文字「逐字句」完整提取出來，並轉換為乾淨、連貫的 Markdown 格式。\n\n請嚴格遵守以下規則：\n1. **修復斷句**：確保句子完整，修復因排版導致的斷行問題。\n2. **保留對話換行**：如果遇到人物對話（通常在引號內），請務必保留其獨立的換行，絕對不要將不同角色的對話合併成同一段落。\n3. **識別上標註解**：請特別注意字尾的小數字（上標）。請將它們格式化為 [n] 或 ^n，確保它們與正文有微小區隔。\n4. **保持原始語言，絕對不要翻譯**：請完全照抄圖片上的文字。\n5. **絕對不要遺漏任何內容**：包含封面、目錄、章節標題與所有內文。\n6. **直接輸出 Markdown**：不要有任何開頭或結尾的解釋。';
-                    }
+                    const systemInstruction = extractionSystemInstruction(hasRawText);
+                    const promptText = buildExtractionPrompt(rawText, hasRawText);
 
                     const response = await generateContentWrapper({
                       model: selectedModel,
@@ -678,7 +578,7 @@ export default function App() {
                     results[index] = response.text || '';
                     success = true;
                   } catch (err) {
-                    console.error(`Chunk ${index} failed (attempt ${retries + 1}):`, err);
+                    reportWarning('pdf_extraction_chunk_failed', { chunk: index + 1, attempt: retries + 1 });
                     retries++;
                     if (retries >= MAX_RETRIES) {
                       if (index === totalExtractionChunks - 1 && !hasRawText) {
@@ -776,7 +676,7 @@ export default function App() {
           latestGlossary = glossaryText;
           latestCharacterMap = detectedCharacters;
         } catch (err) {
-          console.warn("Analysis failed, continuing with defaults.", err);
+          reportWarning('document_analysis_failed');
           setTranslationStyle('一般/通用');
           setGlossary('無');
           setCharacterMap('無');
@@ -814,45 +714,16 @@ export default function App() {
         const MAX_RETRIES = 6;
         let currentChunkTranslated = '';
 
-        const systemInstruction = `你是一位世界級的專業翻譯專家與資深編譯專家，精通各種文體的正體中文翻譯。你不僅擅長長篇小說、技術文件與各類科技、科學領域（如：人工智慧、生物工程、物理學、資訊安全等），更深耕於文學小說、社會科學、歷史、經濟、政治等各類文學與非文學著作。
-你的唯一任務是將使用者提供的文本翻譯成精確、優雅且符合各專業領域規範的繁體中文。
-
-【全域翻譯指南與風格】：
-${detectedStyle}
-
-【全域術語表 (Glossary)】：
-請嚴格遵守以下術語表，確保譯名完全一致：
-${dynamicGlossary !== '無' ? dynamicGlossary : '保持專有名詞與章節標題前後統一。'}
-
-【角色圖譜 (Character Map)】：
-請根據以下角色設定，確保對話語氣與人稱（他/她/它）一致：
-${dynamicCharacterMap !== '無' ? dynamicCharacterMap : '自動識別角色並保持一致。'}
-
-【前情提要 (Plot Summary)】：
-${dynamicPlotSummary ? `目前故事進展：\n${dynamicPlotSummary}` : '這是故事的開頭。'}
-
-${previousSourceText ? `【前文參考 (Context)】：
-為了確保上下文銜接順暢（如代名詞、語氣、連貫性），請參考上一段的原文與譯文：
-[上一段原文]：
-${previousSourceText}
-[上一段譯文]：
-${previousTranslatedText}` : ''}
-
-【強制約束】：
-1. 零漏譯：嚴禁摘要、嚴禁刪減、嚴禁跳過任何段落或句子。即使是重複或看似不重要的內容也必須翻譯。
-2. 嚴禁輸出任何與譯文無關的解釋、評論或提示詞。
-3. 必須 100% 符合術語表與角色圖譜。
-4. 確保標點符號符合繁體中文規範（如使用全形標點，避免英文逗號誤用）。
-5. 嚴禁「超譯」與「幻覺」：不要為了語句優美而加入原文中不存在的形容詞、副詞或任何描述性內容。保持譯文精簡且 100% 忠於原意。
-6. 嚴格保留原文的 Markdown 格式與分段結構：確保標題、段落、清單等格式與原文完全一致，不要將段落合併（除非是為了修復對話排版，見第9點）。
-7. 純譯文輸出：嚴禁在翻譯結果中保留或夾雜原始語言（如英文）的「句子或段落」，絕對不要輸出「原文+譯文」的雙語對照格式。除了專有名詞後方的括號註釋外，整份輸出必須是純粹的繁體中文。
-8. 雙關語與隱喻處理：請敏銳偵測原文中的雙關語、幽默、隱喻或言外之意。盡可能在譯文中重現對等的修辭效果與雙重語意；若中英文無法完美對應，請以最符合上下文語境的方式進行「意譯」，切勿生硬直譯導致失去原有的文字趣味。
-9. 強制對話換行：這是極度重要的規則！只要遇到人物對話（通常包含在引號內），**必須強制獨立成段（換行）**。即使原文中多個角色的對話、或是對話與敘事描述擠在同一個段落，你也**絕對要主動將它們拆分成不同的段落**。每個角色的對話必須獨立一行，並使用繁體中文標準引號（「」與『』）。
-${customInstructions ? `\n【使用者自訂指示 (Custom Instructions)】：\n請嚴格遵守以下由使用者針對此文本提供的特殊翻譯指示：\n${customInstructions}\n` : ''}`;
-
-        const promptText = `請翻譯以下文本。
-【待翻譯文本】：
-${textChunks[i]}`;
+        const systemInstruction = buildTranslationSystemInstruction({
+          style: detectedStyle,
+          glossary: dynamicGlossary,
+          characterMap: dynamicCharacterMap,
+          plotSummary: dynamicPlotSummary,
+          previousSourceText,
+          previousTranslatedText,
+          customInstructions,
+        });
+        const promptText = buildTranslationPrompt(textChunks[i]);
 
         while (!success && retries < MAX_RETRIES) {
           try {
@@ -884,13 +755,15 @@ ${textChunks[i]}`;
             // We only trigger retry if the source is substantial and the target is extremely short.
             // Changed threshold from 0.05 to 0.02 to avoid false positives on concise translations or texts with lots of whitespace.
             if (sourceLength > 150 && targetLength < sourceLength * 0.02) {
-              console.warn(`Translation validation failed for chunk ${i + 1}. Source length: ${sourceLength}, Target length: ${targetLength}.`);
-              console.warn(`Source text: ${textChunks[i].substring(0, 200)}...`);
-              console.warn(`Translated text: ${currentChunkTranslated}`);
+              reportWarning('translation_length_validation_failed', {
+                chunk: i + 1,
+                sourceLength,
+                targetLength,
+              });
               if (retries < 2) {
                 throw new Error("Translated text is suspiciously short. Possible omission.");
               } else {
-                console.warn(`Accepting short translation after ${retries} retries to prevent translation failure.`);
+                reportWarning('short_translation_accepted', { chunk: i + 1, retries });
               }
             }
 
@@ -899,48 +772,13 @@ ${textChunks[i]}`;
             
             const correctionResponse = await generateContentWrapper({
               model: selectedModel,
-              promptText: `請對以下翻譯進行嚴格的自我校對，並提取新出現的專有名詞與劇情發展。
-
-【原文】：
-${textChunks[i]}
-
-【初稿譯文】：
-${currentChunkTranslated}
-
-【現有術語表】：
-${dynamicGlossary}
-
-【現有角色圖譜】：
-${dynamicCharacterMap}
-
-【任務 1：自我校對與零漏譯檢查】：
-請檢查初稿是否有：
-1. **漏譯或誤譯**：檢查是否有任何句子、段落被跳過或未翻譯。
-2. 標點符號錯誤。
-3. 未遵守現有術語表與角色圖譜。
-4. **幻覺或超譯**：檢查譯文是否加入了原文中不存在的資訊。
-5. **格式檢查**：確保譯文保留了原文所有的 Markdown 標記（如 # 標題、* 列表等）以及正確的分段與換行。
-6. **夾雜原文檢查 (極度重要)**：確保初稿中沒有殘留未翻譯的英文「句子或段落」（絕對不可包含雙語對照的段落）。如果發現整句或整段未翻譯的英文，請務必將其翻譯為繁體中文。除了專有名詞的括號註釋外，最終輸出必須是 100% 的繁體中文。
-7. **雙關語與語氣檢查**：確認原文中的雙關語、隱喻或特殊語氣是否被妥善保留並轉化為自然流暢的中文，避免生硬直譯。
-8. **強制對話換行檢查**：這是極度重要的檢查！仔細審視所有對話。如果同一個段落內包含兩個以上角色的對話，或者對話與大段敘事描述擠在一起，**必須強制拆分成多個段落（換行）**。確保每個角色的對話都獨立一行。
-${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完全符合以下使用者自訂指示：\n${customInstructions}\n` : ''}
-請直接提供修正後的「最終完美譯文」。
-
-【任務 2：動態上下文提取】：
-請分析本段內容並提取：
-1. **新術語**：新出現的專有名詞（格式：- [英文]: [中文]）。
-2. **新角色/角色發展**：新出現的角色或現有角色的新資訊（如性別、新關係）。
-3. **劇情摘要**：用 50 字內簡述本段發生的關鍵劇情。
-
-請務必以 JSON 格式回傳，格式如下：
-{
-  "correctedTranslation": "修正後的最終完整譯文。必須嚴格保留原文的 Markdown 格式、標題結構與分段換行，不可合併段落。禁止包含未翻譯英文。純繁中輸出。",
-  "newTerms": ["- [英文]: [中文]"],
-  "newCharacters": ["- [角色名]: [描述]"],
-  "chunkSummary": "本段劇情的極簡摘要",
-  "foundHallucinations": true 或 false,
-  "missingContentDetected": true 或 false
-}`,
+              promptText: buildCorrectionPrompt({
+                sourceText: textChunks[i],
+                draftTranslation: currentChunkTranslated,
+                glossary: dynamicGlossary,
+                characterMap: dynamicCharacterMap,
+                customInstructions,
+              }),
               temperature: 0,
               jsonMode: true
             });
@@ -955,7 +793,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               }
               
               if (correctionResult.missingContentDetected) {
-                console.warn(`Missing content detected in chunk ${i + 1}. Retrying with higher emphasis on completeness.`);
+                reportWarning('translation_missing_content_detected', { chunk: i + 1, retries });
                 retries++;
                 if (retries < MAX_RETRIES) {
                   currentChunkTranslated = '';
@@ -994,7 +832,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                 latestPlotSummary = dynamicPlotSummary;
               }
             } catch (e) {
-              console.warn("Failed to parse correction response, using draft translation.", e);
+              reportWarning('correction_response_parse_failed', { chunk: i + 1 });
             }
 
             success = true;
@@ -1073,7 +911,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
       if (wasCancelled) {
         showToast('翻譯已停止，完成的進度可以從歷史紀錄繼續。', 'success');
       } else {
-        console.error(err);
+        reportError('translation_failed');
         setError(`翻譯失敗 (Translation failed): ${err.message}`);
       }
       if (fileId) {
@@ -1098,7 +936,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
           await saveHistory(record);
           void loadHistory();
         } catch (historyError) {
-          console.warn('Unable to save stopped or failed translation progress', historyError);
+          reportWarning('translation_stop_state_save_failed');
         }
       }
     } finally {
@@ -1203,7 +1041,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 
       showToast('請在列印對話框中選擇「另存為 PDF」', 'success');
     } catch (err: any) {
-      console.error("PDF Error:", err);
+      reportError('pdf_export_failed');
       showToast(`生成 PDF 失敗: ${err.message}`, 'error');
     } finally {
       setIsDownloadingPdf(false);
@@ -1260,7 +1098,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
       }
       showToast("已複製全文到剪貼簿！", 'success');
     } catch (err) {
-      console.error("Failed to copy text:", err);
+      reportError('clipboard_copy_failed');
       showToast("複製失敗，請手動選取複製。", 'error');
     } finally {
       setIsCopying(false);
@@ -1352,7 +1190,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
       setExtractedText(fullText);
       
     } catch (err: any) {
-      console.error(err);
+      reportError('pdf_to_epub_failed');
       setError(`轉換失敗: ${err.message}`);
       showToast(`轉換失敗: ${err.message}`, 'error');
     } finally {
@@ -1394,7 +1232,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error("EPUB generation failed:", response.status, errorText);
+        reportWarning('epub_generation_rejected', { status: response.status });
         throw new Error(`Failed to generate EPUB: ${response.status} ${errorText}`);
       }
 
@@ -1414,7 +1252,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
       
       showToast('EPUB 下載成功！', 'success');
     } catch (err) {
-      console.error("Failed to generate EPUB:", err);
+      reportError('epub_download_failed');
       showToast(`產生 EPUB 失敗，請確定您的網路連線正常。(${err instanceof Error ? err.message : String(err)})`, 'error');
     } finally {
       setIsDownloadingEpub(false);
@@ -1443,24 +1281,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 
   return (
     <div className="app-shell min-h-screen bg-slate-950 text-slate-100 font-sans">
-      {/* Toast Notification */}
-      {toast && (
-        <div key={toast.id} className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 w-[calc(100%-2rem)] sm:w-auto max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 print:hidden ${
-          toast.type === 'success' ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-900/50 backdrop-blur-sm' : 'bg-red-950/80 text-red-400 border border-red-900/50 backdrop-blur-sm'
-        }`}>
-          {toast.type === 'success' ? (
-            <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-          ) : (
-            <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-          )}
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium leading-relaxed whitespace-pre-wrap break-words">{toast.message}</p>
-          </div>
-          <button onClick={() => setToast(null)} className="ml-2 shrink-0 text-slate-500 hover:text-slate-300 transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+      <AppToast toast={toast} onClose={() => setToast(null)} />
 
       <header className="app-header bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-10 print:hidden">
         {isIframe && (
@@ -2062,306 +1883,33 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         </div>
       </main>
 
-      {/* History Modal */}
       {showHistory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50">
-              <h2 className="text-xl font-semibold text-slate-100 flex items-center gap-2">
-                <History className="w-5 h-5 text-blue-400" />
-                歷史紀錄
-              </h2>
-              <button 
-                onClick={() => setShowHistory(false)}
-                className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-6">
-              {history.length === 0 ? (
-                <div className="text-center py-12 text-slate-500">
-                  <History className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                  <p>尚無歷史紀錄</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {history.map(record => (
-                    <div 
-                      key={record.id}
-                      onClick={() => handleLoadHistory(record)}
-                      className={`p-4 rounded-xl border transition-all cursor-pointer group ${
-                        currentFileId === record.id 
-                          ? 'bg-blue-900/20 border-blue-500/50 shadow-[0_0_15px_rgba(37,99,235,0.1)]' 
-                          : 'bg-slate-800/50 border-slate-700 hover:bg-slate-800 hover:border-slate-600'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-medium text-slate-200 truncate mb-1">
-                            {record.title}
-                          </h3>
-                          <div className="flex items-center gap-3 text-xs text-slate-400">
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3.5 h-3.5" />
-                              {new Date(record.timestamp).toLocaleString()}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              {record.status === 'completed' ? (
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                              ) : record.status === 'error' ? (
-                                <AlertCircle className="w-3.5 h-3.5 text-red-500" />
-                              ) : (
-                                <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />
-                              )}
-                              {record.status === 'completed' ? '已完成' : record.status === 'error' ? '錯誤' : `翻譯中 (${record.currentChunk}/${record.totalChunks})`}
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          onClick={(e) => handleDeleteHistory(record.id, e)}
-                          className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-                          title="刪除紀錄"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <HistoryModal
+          records={history}
+          currentFileId={currentFileId}
+          onClose={() => setShowHistory(false)}
+          onLoad={handleLoadHistory}
+          onRequestDelete={handleDeleteHistory}
+        />
       )}
 
-      {/* Delete Confirmation Modal */}
       {historyToDelete && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-6">
-              <div className="flex items-center gap-3 mb-4 text-red-400">
-                <AlertCircle className="w-6 h-6" />
-                <h2 className="text-xl font-semibold">確認刪除</h2>
-              </div>
-              <p className="text-slate-300 mb-6">
-                您確定要刪除這筆歷史紀錄嗎？此操作無法復原。
-              </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setHistoryToDelete(null)}
-                  className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={confirmDeleteHistory}
-                  className="px-4 py-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors"
-                >
-                  確認刪除
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <DeleteHistoryDialog onCancel={() => setHistoryToDelete(null)} onConfirm={confirmDeleteHistory} />
       )}
 
-      {/* Info Modal */}
-      {showInfoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between p-6 border-b border-slate-800 bg-slate-900/50">
-              <div className="flex items-center gap-3">
-                <div className="bg-blue-600/20 p-2 rounded-xl border border-blue-500/30">
-                  <Info className="w-5 h-5 text-blue-400" />
-                </div>
-                <h2 className="text-xl font-semibold text-slate-100">系統說明與翻譯流程</h2>
-              </div>
-              <button 
-                onClick={() => setShowInfoModal(false)}
-                className="text-slate-400 hover:text-slate-200 transition-colors p-2 hover:bg-slate-800 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto custom-scrollbar space-y-8 text-slate-300">
-              <section>
-                <h3 className="text-lg font-medium text-slate-100 mb-3 flex items-center gap-2">
-                  <div className="w-1.5 h-4 bg-blue-500 rounded-full"></div>
-                  核心功能
-                </h3>
-                <ul className="list-disc list-inside space-y-2 text-sm leading-relaxed ml-2">
-                  <li><strong className="text-slate-200">多模型支援：</strong>整合 Google Gemini 與 OpenAI GPT 雙生態系，提供多樣化的頂級 AI 模型選擇。</li>
-                  <li><strong className="text-slate-200">多格式支援：</strong>支援 PDF 與 Markdown 檔案上傳。</li>
-                  <li><strong className="text-slate-200">智慧排版修復：</strong>自動修復 PDF 斷行問題，還原 Markdown 標題與清單格式。</li>
-                  <li><strong className="text-slate-200">多格式匯出：</strong>支援將翻譯結果匯出為 Markdown、排版優化的 PDF，以及 EPUB 電子書。</li>
-                  <li><strong className="text-slate-200">進度接續：</strong>自動儲存翻譯歷史，支援中斷後接續翻譯。</li>
-                </ul>
-              </section>
+      {showInfoModal && <InfoModal onClose={() => setShowInfoModal(false)} />}
 
-              <section>
-                <h3 className="text-lg font-medium text-slate-100 mb-3 flex items-center gap-2">
-                  <div className="w-1.5 h-4 bg-purple-500 rounded-full"></div>
-                  AI 翻譯流程架構
-                </h3>
-                <div className="space-y-4 text-sm leading-relaxed">
-                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                    <h4 className="font-semibold text-purple-400 mb-2">階段一：文字提取與格式修復 (Extraction)</h4>
-                    <p>使用 Web Worker 在背景解析 PDF，並透過 Gemini 模型將碎片化的文字重新排版為連貫的 Markdown 格式，同時強制保留對話換行與引用序號，此階段<strong className="text-slate-200">絕對不進行翻譯</strong>以保留原意。</p>
-                  </div>
-                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                    <h4 className="font-semibold text-purple-400 mb-2">階段二：全域分析與風格建模 (Global Analysis)</h4>
-                    <p>在正式翻譯前，系統會讀取前 50,000 字進行分析，自動提取<strong className="text-slate-200">核心術語表 (Glossary)</strong>、<strong className="text-slate-200">角色圖譜 (Character Map)</strong>，並制定統一的<strong className="text-slate-200">翻譯風格指南</strong>，確保長篇翻譯的語氣與名詞一致。</p>
-                  </div>
-                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                    <h4 className="font-semibold text-purple-400 mb-2">階段三：迭代式分段翻譯 (Iterative Translation)</h4>
-                    <p>將文本切分為每塊 3,500 字的區塊進行翻譯。每次翻譯都會帶入：全域術語表、角色圖譜、前情提要，以及<strong className="text-slate-200">上一段的原文與譯文</strong>，確保上下文完美銜接。</p>
-                  </div>
-                  <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                    <h4 className="font-semibold text-purple-400 mb-2">階段四：自我校對與動態更新 (Self-Correction)</h4>
-                    <p>初稿完成後，系統會立即進行第二次 AI 調用進行嚴格校對。檢查是否有<strong className="text-slate-200">漏譯、幻覺或超譯</strong>。同時，系統會動態提取本段新出現的術語與劇情，並<strong className="text-slate-200">滾動式更新</strong>到全域術語表中，供下一段使用。</p>
-                  </div>
-                </div>
-              </section>
-
-              <section>
-                <h3 className="text-lg font-medium text-slate-100 mb-3 flex items-center gap-2">
-                  <div className="w-1.5 h-4 bg-emerald-500 rounded-full"></div>
-                  系統底層參數設定
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
-                    <span className="text-slate-400 block mb-1">區塊大小 (Chunk Size)</span>
-                    <strong className="text-slate-200">3,500 字元</strong>
-                    <p className="text-xs text-slate-500 mt-1">確保 Markdown 格式保留與術語一致性的最佳平衡點。</p>
-                  </div>
-                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
-                    <span className="text-slate-400 block mb-1">提取溫度 (Extraction Temp)</span>
-                    <strong className="text-slate-200">0.1</strong>
-                    <p className="text-xs text-slate-500 mt-1">極低溫度，確保 100% 忠實還原原文，不產生幻覺。</p>
-                  </div>
-                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
-                    <span className="text-slate-400 block mb-1">翻譯溫度 (Translation Temp)</span>
-                    <strong className="text-slate-200">0.2</strong>
-                    <p className="text-xs text-slate-500 mt-1">低溫度，在保持語句通順的同時，嚴格限制超譯。</p>
-                  </div>
-                  <div className="bg-slate-800/30 p-3 rounded-lg border border-slate-700/30">
-                    <span className="text-slate-400 block mb-1">校對溫度 (Correction Temp)</span>
-                    <strong className="text-slate-200">0.0</strong>
-                    <p className="text-xs text-slate-500 mt-1">絕對理性，專注於尋找漏譯與格式錯誤，並以 JSON 格式精準輸出。</p>
-                  </div>
-                </div>
-              </section>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* API Key Modal */}
       {showKeyModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
-            <button 
-              onClick={() => setShowKeyModal(false)}
-              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 transition-colors p-1"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            
-            <div className="p-8 text-center">
-              <div className="w-16 h-16 bg-blue-900/30 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
-                <Key className="w-8 h-8" />
-              </div>
-              <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
-              <p className="text-slate-400 mb-6 text-sm leading-relaxed">
-                使用此翻譯工具需要設定對應的 API Key。預設只保留到此分頁工作階段結束，並直接傳送給所選的 AI 服務。
-              </p>
-
-              <div className="text-left space-y-4">
-                <div>
-                  <p className="text-sm text-slate-300 mb-2 font-medium flex justify-between">
-                    <span>Google Gemini API Key：</span>
-                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs text-blue-400 hover:text-blue-300 underline">獲取金鑰</a>
-                  </p>
-                  <input
-                    type="password"
-                    placeholder="AIzaSy..."
-                    value={manualApiKey}
-                    onChange={(e) => setManualApiKey(e.target.value)}
-                    className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <p className="text-sm text-slate-300 mb-2 font-medium flex justify-between">
-                    <span>OpenAI API Key (選填)：</span>
-                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-xs text-emerald-400 hover:text-emerald-300 underline">獲取金鑰</a>
-                  </p>
-                  <input
-                    type="password"
-                    placeholder="sk-proj-..."
-                    value={manualOpenaiApiKey}
-                    onChange={(e) => setManualOpenaiApiKey(e.target.value)}
-                    className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-colors"
-                  />
-                </div>
-
-                <label className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={rememberApiKeys}
-                    onChange={(event) => setRememberApiKeys(event.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-slate-700 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span>
-                    <span className="block text-sm font-medium text-slate-300">在這台裝置記住金鑰</span>
-                    <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">只建議在自己的私人裝置啟用。瀏覽器儲存空間不是密碼保管庫。</span>
-                  </span>
-                </label>
-
-                <div className="pt-4">
-                  <button
-                    onClick={() => {
-                      const trimmedGoogle = manualApiKey.trim();
-                      const trimmedOpenai = manualOpenaiApiKey.trim();
-                      if (trimmedGoogle !== '' && trimmedGoogle.length <= 20) {
-                        showToast("Google API Key 格式不正確", 'error');
-                        return;
-                      }
-                      if (trimmedOpenai !== '' && trimmedOpenai.length <= 10) {
-                        showToast("OpenAI API Key 格式不正確", 'error');
-                        return;
-                      }
-
-                      persistStoredKey(trimmedGoogle, SESSION_STORAGE_KEY_NAME, LOCAL_STORAGE_KEY_NAME, rememberApiKeys);
-                      persistStoredKey(trimmedOpenai, SESSION_STORAGE_OPENAI_KEY_NAME, LOCAL_STORAGE_OPENAI_KEY_NAME, rememberApiKeys);
-                      setIsManualKeyActive(trimmedGoogle.length > 20);
-                      setIsOpenaiKeyActive(trimmedOpenai.length > 10);
-                      setManualApiKey(trimmedGoogle);
-                      setManualOpenaiApiKey(trimmedOpenai);
-
-                      if (trimmedGoogle === '' && trimmedOpenai === '') {
-                        showToast('已清除所有儲存的 API Key', 'success');
-                      } else {
-                        showToast(rememberApiKeys ? '已在這台裝置記住並套用金鑰' : '已在此分頁工作階段套用金鑰', 'success');
-                      }
-                      setShowKeyModal(false);
-                    }}
-                    className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50"
-                  >
-                    儲存並套用
-                  </button>
-                </div>
-              </div>
-              
-              <p className="text-xs text-slate-500 mt-6 text-center">
-                若要清除金鑰，請將輸入框留空後儲存。金鑰不會傳送到本網站伺服器。
-              </p>
-            </div>
-          </div>
-        </div>
+        <ApiKeyModal
+          googleKey={manualApiKey}
+          openaiKey={manualOpenaiApiKey}
+          rememberOnDevice={rememberApiKeys}
+          setGoogleKey={setManualApiKey}
+          setOpenaiKey={setManualOpenaiApiKey}
+          setRememberOnDevice={setRememberApiKeys}
+          onClose={() => setShowKeyModal(false)}
+          onSave={handleSaveApiKeys}
+        />
       )}
 
     </div>

@@ -3,6 +3,7 @@ import { PDFDocument } from 'pdf-lib';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { uint8ArrayToBase64 } from './lib/text';
 import { assertPdfPageLimit } from './lib/file-limits';
+import { reportWarning } from './lib/diagnostics';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -118,8 +119,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
               .join(' ') + '\n';
             page.cleanup();
           }
-        } catch (error) {
-          console.warn(`Worker failed to extract raw text for chunk ${index}`, error);
+        } catch {
+          reportWarning('worker_raw_text_extraction_failed', { chunk: index + 1 });
         }
 
         let chunkBase64: string | undefined;

@@ -56,3 +56,14 @@ All dates use Asia/Taipei unless noted otherwise.
 - Extracted the EPUB rate limiter and added expired-client pruning plus reset headers.
 - Added analysis, model-cost, and rate-limit tests, bringing the suite to 17 tests.
 - Validation: strict TypeScript, all 17 unit tests, and production build passed.
+
+## 2026-08-31 — Repository cleanup and main-program decomposition
+
+- Removed 30 obsolete root and `src/test-*` experiments, including six generated EPUB fixtures; all remain recoverable from Git history.
+- Added `.gitignore` rules for root test EPUB artifacts and removed obsolete TypeScript exclusion patterns.
+- Replaced document-bearing console output with development-only, content-safe diagnostic event codes.
+- Updated the React error boundary and PDF worker so they do not print raw error objects in the client.
+- Extracted Gemini/OpenAI adapters, session-first API-key storage, full extraction/translation/correction prompts, toast UI, history dialogs, information modal, and API-key modal.
+- Reduced `src/App.tsx` from 2,369 to 1,917 lines while retaining the complete prompt rules.
+- Added API-key storage and prompt-builder tests, increasing the suite from 17 to 21 tests.
+- Validation: strict TypeScript, all 21 unit tests, and production build passed.
