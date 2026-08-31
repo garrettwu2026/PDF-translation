@@ -7,37 +7,346 @@
 #translation-result-content *,
 #pdf-clone-content * {
   /* Force standard colors using !important to override Tailwind 4 oklch variables */
-  --tw-prose-body: #d1d5db !important;
-  --tw-prose-headings: #f8fafc !important;
-  --tw-prose-links: #60a5fa !important;
-  --tw-prose-bold: #f8fafc !important;
-  --tw-prose-counters: #94a3b8 !important;
-  --tw-prose-bullets: #475569 !important;
-  --tw-prose-hr: #334155 !important;
-  --tw-prose-quotes: #f1f5f9 !important;
-  --tw-prose-quote-borders: #334155 !important;
-  --tw-prose-captions: #94a3b8 !important;
-  --tw-prose-code: #f8fafc !important;
-  --tw-prose-pre-code: #e2e8f0 !important;
-  --tw-prose-pre-bg: #0f172a !important;
-  --tw-prose-th-borders: #334155 !important;
-  --tw-prose-td-borders: #1e293b !important;
+  --tw-prose-body: #334155 !important;
+  --tw-prose-headings: #172033 !important;
+  --tw-prose-links: #3568e8 !important;
+  --tw-prose-bold: #172033 !important;
+  --tw-prose-counters: #64748b !important;
+  --tw-prose-bullets: #94a3b8 !important;
+  --tw-prose-hr: #e2e8f0 !important;
+  --tw-prose-quotes: #334155 !important;
+  --tw-prose-quote-borders: #8aa7f8 !important;
+  --tw-prose-captions: #64748b !important;
+  --tw-prose-code: #263a70 !important;
+  --tw-prose-pre-code: #e8eefc !important;
+  --tw-prose-pre-bg: #172033 !important;
+  --tw-prose-th-borders: #d8e0eb !important;
+  --tw-prose-td-borders: #e8edf4 !important;
   
   /* Fallback for standard CSS properties */
-  color: #d1d5db !important;
-  border-color: #334155 !important;
-  text-decoration-color: #60a5fa !important;
+  color: #334155 !important;
+  border-color: #e2e8f0 !important;
+  text-decoration-color: #3568e8 !important;
 }
 
 #translation-result-content,
 #pdf-clone-content {
-  background-color: #0f172a !important;
-  padding: 20px !important;
+  background-color: #ffffff !important;
+  padding: 28px !important;
   width: 100% !important;
   max-width: 800px !important;
   margin: 0 auto !important;
   height: auto !important;
   overflow: visible !important;
+}
+
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f6f8fc;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  color: #172033;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(85, 116, 236, 0.11), transparent 25rem),
+    radial-gradient(circle at 90% 8%, rgba(38, 177, 157, 0.08), transparent 28rem),
+    #f6f8fc !important;
+}
+
+.app-shell .bg-slate-950,
+.app-shell [class*="bg-slate-950/"] {
+  background-color: #f7f9fc !important;
+}
+
+.app-shell .bg-slate-900,
+.app-shell [class*="bg-slate-900/"] {
+  background-color: #ffffff !important;
+}
+
+.app-shell .bg-slate-800,
+.app-shell [class*="bg-slate-800/"] {
+  background-color: #f0f3f8 !important;
+}
+
+.app-shell .border-slate-900,
+.app-shell .border-slate-800,
+.app-shell .border-slate-700,
+.app-shell .border-slate-600,
+.app-shell [class*="border-slate-900/"],
+.app-shell [class*="border-slate-800/"],
+.app-shell [class*="border-slate-700/"] {
+  border-color: #e2e8f0 !important;
+}
+
+.app-shell .text-slate-100,
+.app-shell .text-slate-200 {
+  color: #172033 !important;
+}
+
+.app-shell .text-slate-300 {
+  color: #334155 !important;
+}
+
+.app-shell .text-slate-400 {
+  color: #64748b !important;
+}
+
+.app-shell .text-slate-500 {
+  color: #8290a5 !important;
+}
+
+.app-shell .text-slate-600 {
+  color: #9ba7b8 !important;
+}
+
+.app-shell .text-white {
+  color: #ffffff !important;
+}
+
+.app-shell .text-blue-300,
+.app-shell .text-blue-400,
+.app-shell .text-blue-500 {
+  color: #3568e8 !important;
+}
+
+.app-header {
+  background: rgba(255, 255, 255, 0.88) !important;
+  border-color: rgba(217, 225, 236, 0.9) !important;
+  box-shadow: 0 1px 0 rgba(23, 32, 51, 0.03);
+}
+
+.brand-mark {
+  color: #3568e8;
+  background: linear-gradient(145deg, #edf2ff, #e6edff) !important;
+  border-color: #d4defd !important;
+  box-shadow: 0 8px 22px rgba(53, 104, 232, 0.16);
+}
+
+.header-actions button {
+  min-height: 38px;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none;
+}
+
+.header-actions button:hover {
+  color: #244faf !important;
+  background: #f0f4ff !important;
+}
+
+.workspace-intro {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+}
+
+.eyebrow {
+  color: #3568e8;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+}
+
+.mode-switch {
+  background: #e9eef6;
+  border: 1px solid #dfe6f0;
+}
+
+.mode-switch button.is-active {
+  color: #244faf !important;
+  background: #ffffff;
+  box-shadow: 0 3px 10px rgba(23, 32, 51, 0.08);
+}
+
+.app-card,
+.result-panel {
+  border-color: #e1e7f0 !important;
+  box-shadow: 0 10px 34px rgba(23, 32, 51, 0.065) !important;
+}
+
+.app-card {
+  transition: box-shadow 180ms ease, transform 180ms ease;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.step-badge {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 0.7rem;
+  color: #3568e8;
+  background: #eef3ff;
+  border: 1px solid #dbe5ff;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.model-select,
+.app-shell input[type="text"],
+.app-shell textarea,
+.app-shell select {
+  color: #263248 !important;
+  background-color: #fbfcfe !important;
+  border-color: #d9e1ec !important;
+  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.03);
+}
+
+.app-shell input[type="text"]:focus,
+.app-shell textarea:focus,
+.app-shell select:focus {
+  border-color: #7294ee !important;
+  box-shadow: 0 0 0 3px rgba(53, 104, 232, 0.11);
+}
+
+.selected-model {
+  background: linear-gradient(145deg, #f8faff, #f4f8ff);
+  border-color: #dfe7fa !important;
+}
+
+.model-badge {
+  color: #2b58c2;
+  background: #e8efff;
+}
+
+.price-grid > div {
+  padding: 0.55rem 0.35rem;
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid #e5ebf5;
+}
+
+.price-grid span,
+.price-grid strong {
+  display: block;
+}
+
+.price-grid span {
+  color: #8a96a8;
+  font-size: 0.65rem;
+}
+
+.price-grid strong {
+  color: #2e3a50;
+  margin-top: 0.15rem;
+  font-size: 0.8rem;
+}
+
+.friendly-option {
+  background: #f8fafc !important;
+}
+
+.advanced-settings summary {
+  list-style: none;
+}
+
+.advanced-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-settings[open] summary {
+  margin-bottom: 1rem;
+}
+
+.action-card {
+  background: linear-gradient(145deg, #ffffff, #f9fbff) !important;
+}
+
+.action-card button:not(:disabled) {
+  box-shadow: 0 10px 24px rgba(53, 104, 232, 0.22) !important;
+}
+
+.result-column {
+  min-width: 0;
+}
+
+.result-panel {
+  position: sticky;
+  top: 6.5rem;
+  max-height: calc(100vh - 8rem);
+}
+
+.result-toolbar {
+  background: rgba(250, 252, 255, 0.94) !important;
+}
+
+.result-status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: #31b69a;
+  box-shadow: 0 0 0 4px rgba(49, 182, 154, 0.12);
+}
+
+.result-actions button {
+  white-space: nowrap;
+  background: #ffffff !important;
+  border-color: #dfe5ee !important;
+  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.03);
+}
+
+.result-actions button:hover:not(:disabled) {
+  color: #244faf !important;
+  background: #f3f6ff !important;
+  border-color: #cbd8f7 !important;
+}
+
+.app-shell .prose-invert {
+  --tw-prose-body: #334155;
+  --tw-prose-headings: #172033;
+  --tw-prose-bold: #172033;
+  --tw-prose-links: #3568e8;
+  --tw-prose-quotes: #475569;
+}
+
+@media (max-width: 1023px) {
+  .result-panel {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-main {
+    padding-top: 1.5rem;
+  }
+
+  .workspace-intro h2 {
+    font-size: 1.5rem;
+  }
+
+  .app-card {
+    padding: 1.15rem !important;
+    border-radius: 1rem !important;
+  }
+
+  .result-panel {
+    min-height: 520px;
+    border-radius: 1rem !important;
+  }
+
+  #translation-result-content {
+    padding: 1rem !important;
+  }
 }
 
 /* Ensure standard colors for printing/PDF capture */

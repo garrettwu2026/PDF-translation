@@ -1396,7 +1396,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
   const totalActualCostTWD = totalActualCost * 32.5;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
+    <div className="app-shell min-h-screen bg-slate-950 text-slate-100 font-sans">
       {/* Toast Notification */}
       {toast && (
         <div key={toast.id} className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 w-[calc(100%-2rem)] sm:w-auto max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 print:hidden ${
@@ -1416,7 +1416,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         </div>
       )}
 
-      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-10 print:hidden">
+      <header className="app-header bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-10 print:hidden">
         {isIframe && (
           <div className="bg-amber-950/30 border-b border-amber-900/50 px-4 py-2.5 sm:px-6 lg:px-8 flex items-start sm:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-2 text-amber-500 text-sm">
@@ -1436,37 +1436,37 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
             </a>
           </div>
         )}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-blue-600/20 border border-blue-500/30 p-2 rounded-xl shadow-[0_0_15px_rgba(37,99,235,0.2)]">
+            <div className="brand-mark bg-blue-600/20 border border-blue-500/30 p-2.5 rounded-xl">
               <FileText className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h1 className="text-xl font-semibold tracking-tight text-slate-100">PDF 翻譯神器</h1>
-              <p className="text-[11px] text-slate-500 mt-0.5">Gemini 3.7 × OpenAI GPT-5.6</p>
+              <h1 className="text-lg font-semibold tracking-tight text-slate-100">PDF 翻譯工作台</h1>
+              <p className="text-[11px] text-slate-500 mt-0.5">清楚、安心地完成每一份翻譯</p>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="header-actions flex items-center gap-2">
             <button
               onClick={() => setShowInfoModal(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
             >
               <Info className="w-4 h-4" />
-              系統說明
+              <span className="hidden sm:inline">使用說明</span>
             </button>
             <button
               onClick={() => setShowKeyModal(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
             >
               <Key className="w-4 h-4" />
-              設定 API Key
+              <span className="hidden sm:inline">API Key</span>
             </button>
             <button
               onClick={() => setShowHistory(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
             >
               <History className="w-4 h-4" />
-              歷史紀錄
+              <span className="hidden sm:inline">歷史紀錄</span>
             </button>
             {((selectedModelData.provider === 'google' && isManualKeyActive) ||
               (selectedModelData.provider === 'openai' && isOpenaiKeyActive)) && (
@@ -1479,124 +1479,92 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 print:p-0 print:m-0 print:max-w-none">
-        <div className="flex gap-6 mb-8 border-b border-slate-800 print:hidden">
+      <main className="app-main max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 print:p-0 print:m-0 print:max-w-none">
+        <div className="workspace-intro mb-7 print:hidden">
+          <div>
+            <p className="eyebrow">AI DOCUMENT WORKSPACE</p>
+            <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-100 mt-1">把文件變成好讀的繁體中文</h2>
+            <p className="text-sm text-slate-500 mt-2">上傳檔案、選擇模型，剩下的交給我們。</p>
+          </div>
+        </div>
+        <div className="mode-switch inline-flex gap-1 mb-8 p-1 rounded-xl print:hidden">
           <button 
             onClick={() => setActiveTab('translate')}
-            className={`pb-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'translate' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-700'}`}
+            className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'translate' ? 'is-active text-blue-400' : 'text-slate-400 hover:text-slate-300'}`}
           >
             PDF 翻譯
           </button>
           <button 
             onClick={() => setActiveTab('converter')}
-            className={`pb-4 px-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'converter' ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-700'}`}
+            className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'converter' ? 'is-active text-blue-400' : 'text-slate-400 hover:text-slate-300'}`}
           >
             文件轉換器
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 print:block print:gap-0">
+        <div className="workspace-grid grid grid-cols-1 lg:grid-cols-12 gap-6 print:block print:gap-0">
           
-          <div className="lg:col-span-4 space-y-6 print:hidden">
+          <div className="control-rail lg:col-span-5 xl:col-span-4 space-y-5 print:hidden">
             
             {activeTab === 'translate' && (
-              <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
-                <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
-                  <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">1</div>
-                  選擇模型
-                </h2>
-                <div className="mb-5 rounded-xl border border-cyan-500/20 bg-cyan-950/20 px-3.5 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-semibold text-cyan-300">2026 最新模型與官方價格</span>
-                    <span className="rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400">已更新</span>
+              <div className="app-card model-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+                <div className="section-heading">
+                  <div className="step-badge">1</div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-200">選擇 AI 模型</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">依照品質、速度和預算選擇</p>
                   </div>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-400">費用皆為標準 API 每百萬 tokens 美元單價；實際帳單以供應商為準。</p>
                 </div>
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-sm font-semibold text-blue-400 mb-2 pl-1">
-                      Google Gemini 模型
-                    </h3>
-                    <div className="space-y-3">
-                      {MODELS.filter(m => m.provider === 'google').map(model => (
-                        <label 
-                          key={model.id}
-                          className={`flex items-start p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
-                            selectedModel === model.id 
-                              ? 'border-blue-500 bg-blue-900/20 shadow-[0_0_10px_rgba(37,99,235,0.1)]' 
-                              : 'border-slate-800 hover:border-blue-500/50 hover:bg-slate-800/50'
-                          }`}
-                        >
-                          <input 
-                            type="radio" 
-                            name="model" 
-                            value={model.id}
-                            checked={selectedModel === model.id}
-                            onChange={(e) => setSelectedModel(e.target.value)}
-                            className="mt-1 text-blue-500 focus:ring-blue-500 bg-slate-950 border-slate-700"
-                          />
-                          <div className="ml-3 min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-medium text-slate-200">{model.name}</span>
-                              <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-300">{model.badge}</span>
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1 leading-relaxed">
-                              輸入 ${model.inputPrice}・快取 ${model.cachedInputPrice}・輸出 ${model.outputPrice}
-                              <span className="block text-slate-600">每 1M tokens{model.priceNote ? `・${model.priceNote}` : ''}</span>
-                            </div>
-                          </div>
-                        </label>
-                      ))}
+
+                <label htmlFor="model-select" className="block text-xs font-semibold text-slate-500 mb-2">翻譯模型</label>
+                <select
+                  id="model-select"
+                  value={selectedModel}
+                  onChange={(event) => setSelectedModel(event.target.value)}
+                  className="model-select w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <optgroup label="Google Gemini">
+                    {MODELS.filter(model => model.provider === 'google').map(model => (
+                      <option key={model.id} value={model.id}>{model.name} — {model.badge}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="OpenAI GPT">
+                    {MODELS.filter(model => model.provider === 'openai').map(model => (
+                      <option key={model.id} value={model.id}>{model.name} — {model.badge}</option>
+                    ))}
+                  </optgroup>
+                </select>
+
+                <div className="selected-model mt-4 rounded-xl border border-slate-800 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                        {selectedModelData.provider === 'google' ? 'Google Gemini' : 'OpenAI GPT'}
+                      </p>
+                      <p className="font-semibold text-slate-200 mt-0.5 truncate">{selectedModelData.name}</p>
                     </div>
+                    <span className="model-badge shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold">{selectedModelData.badge}</span>
                   </div>
-                  
-                  <div>
-                    <h3 className="text-sm font-semibold text-emerald-400 mb-2 pl-1">
-                      OpenAI GPT 模型
-                    </h3>
-                    <div className="space-y-3">
-                      {MODELS.filter(m => m.provider === 'openai').map(model => (
-                        <label 
-                          key={model.id}
-                          className={`flex items-start p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
-                            selectedModel === model.id 
-                              ? 'border-emerald-500 bg-emerald-900/20 shadow-[0_0_10px_rgba(16,185,129,0.1)]' 
-                              : 'border-slate-800 hover:border-emerald-500/50 hover:bg-slate-800/50'
-                          }`}
-                        >
-                          <input 
-                            type="radio" 
-                            name="model" 
-                            value={model.id}
-                            checked={selectedModel === model.id}
-                            onChange={(e) => setSelectedModel(e.target.value)}
-                            className="mt-1 text-emerald-500 focus:ring-emerald-500 bg-slate-950 border-slate-700"
-                          />
-                          <div className="ml-3 min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-medium text-slate-200">{model.name}</span>
-                              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">{model.badge}</span>
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1 leading-relaxed">
-                              輸入 ${model.inputPrice}・快取 ${model.cachedInputPrice}・輸出 ${model.outputPrice}
-                              <span className="block text-slate-600">每 1M tokens{model.priceNote ? `・${model.priceNote}` : ''}</span>
-                            </div>
-                          </div>
-                        </label>
-                      ))}
-                    </div>
+                  <div className="price-grid grid grid-cols-3 gap-2 mt-4 text-center">
+                    <div><span>輸入</span><strong>${selectedModelData.inputPrice}</strong></div>
+                    <div><span>快取</span><strong>${selectedModelData.cachedInputPrice}</strong></div>
+                    <div><span>輸出</span><strong>${selectedModelData.outputPrice}</strong></div>
                   </div>
+                  <p className="text-[11px] text-slate-500 mt-3">每 1M tokens{selectedModelData.priceNote ? `・${selectedModelData.priceNote}` : ''}</p>
                 </div>
               </div>
             )}
 
-            <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
-              <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
-                <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">
+            <div className="app-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+              <div className="section-heading">
+                <div className="step-badge">
                   {activeTab === 'translate' ? '2' : '1'}
                 </div>
-                上傳 PDF
-              </h2>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-200">上傳文件</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">支援 PDF 與 Markdown</p>
+                </div>
+              </div>
               
               <div 
                 onClick={() => fileInputRef.current?.click()}
@@ -1631,7 +1599,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 
               {activeTab === 'translate' && (
                 <div className="mt-4 space-y-4">
-                  <div className="flex items-start gap-3 p-3 bg-slate-950/50 border border-slate-800 rounded-xl">
+                  <div className="friendly-option flex items-start gap-3 p-3 bg-slate-950/50 border border-slate-800 rounded-xl">
                     <div className="flex items-center h-5 mt-0.5">
                       <input
                         id="split-translation"
@@ -1668,11 +1636,11 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                 </div>
               )}
 
-              <div className="mt-6 pt-6 border-t border-slate-800">
-                <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+              <details className="advanced-settings mt-6 pt-5 border-t border-slate-800">
+                <summary className="text-sm font-semibold text-slate-300 flex items-center gap-2 cursor-pointer">
                   <Book className="w-4 h-4 text-blue-400" />
-                  EPUB 匯出設定
-                </h3>
+                  EPUB 匯出設定 <span className="ml-auto text-xs font-normal text-slate-500">選填</span>
+                </summary>
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs text-slate-500 mb-1.5">作者名稱 (選填)</label>
@@ -1731,7 +1699,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                     )}
                   </div>
                 </div>
-              </div>
+              </details>
 
               {activeTab === 'translate' && file && (
                 <div className="mt-6 bg-slate-950/50 rounded-xl p-4 border border-slate-800 shadow-inner">
@@ -1816,11 +1784,11 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
             </div>
 
             {activeTab === 'converter' && (
-              <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
-                <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
-                  <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">2</div>
-                  設定 EPUB
-                </h2>
+              <div className="app-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+                <div className="section-heading">
+                  <div className="step-badge">2</div>
+                  <div><h2 className="text-lg font-semibold text-slate-200">設定 EPUB</h2><p className="text-xs text-slate-500 mt-0.5">補上書名與資訊</p></div>
+                </div>
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-400 mb-1">自訂書名 (選填)</label>
@@ -1837,11 +1805,11 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
             )}
 
             {activeTab === 'translate' && (
-              <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
-                <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
-                  <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">3</div>
-                  翻譯設定
-                </h2>
+              <div className="app-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+                <div className="section-heading">
+                  <div className="step-badge">3</div>
+                  <div><h2 className="text-lg font-semibold text-slate-200">翻譯偏好</h2><p className="text-xs text-slate-500 mt-0.5">有特別需求再填寫即可</p></div>
+                </div>
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-400 mb-1">自訂翻譯指示 (選填)</label>
@@ -1856,13 +1824,13 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               </div>
             )}
 
-            <div className="bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
-              <h2 className="text-lg font-medium mb-4 flex items-center gap-2 text-slate-200">
-                <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">
+            <div className="app-card action-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+              <div className="section-heading">
+                <div className="step-badge">
                   {activeTab === 'translate' ? '4' : '3'}
                 </div>
-                {activeTab === 'translate' ? '開始翻譯' : '開始轉換'}
-              </h2>
+                <div><h2 className="text-lg font-semibold text-slate-200">{activeTab === 'translate' ? '準備開始' : '準備轉換'}</h2><p className="text-xs text-slate-500 mt-0.5">確認設定後即可執行</p></div>
+              </div>
               
               {activeTab === 'translate' ? (
                 <button
@@ -1951,14 +1919,15 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 
           </div>
 
-          <div className="lg:col-span-8 print:block print:w-full">
-            <div className="bg-slate-900 rounded-2xl shadow-lg shadow-black/20 border border-slate-800 h-full min-h-[600px] flex flex-col overflow-hidden print:border-none print:shadow-none print:h-auto print:min-h-0 print:rounded-none print:block">
-              <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50 print:hidden">
+          <div className="result-column lg:col-span-7 xl:col-span-8 print:block print:w-full">
+            <div className="result-panel bg-slate-900 rounded-2xl shadow-lg shadow-black/20 border border-slate-800 h-full min-h-[680px] flex flex-col overflow-hidden print:border-none print:shadow-none print:h-auto print:min-h-0 print:rounded-none print:block">
+              <div className="result-toolbar px-5 sm:px-6 py-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/50 print:hidden">
                 <h2 className="text-lg font-medium flex items-center gap-2 text-slate-200">
-                  {activeTab === 'translate' ? '翻譯結果' : '提取文字預覽'}
+                  <span className="result-status-dot"></span>
+                  {activeTab === 'translate' ? '翻譯預覽' : '文字預覽'}
                 </h2>
                 
-                <div className="flex items-center gap-2">
+                <div className="result-actions flex items-center gap-2 overflow-x-auto max-w-full">
                   <button
                     onClick={handleCopyText}
                     disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isCopying}
