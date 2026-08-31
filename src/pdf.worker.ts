@@ -2,91 +2,161 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { uint8ArrayToBase64 } from './lib/text';
+import { assertPdfPageLimit } from './lib/file-limits';
 
-// Set the worker source for pdfjs-dist
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-self.onmessage = async (e: MessageEvent) => {
-  const { type, payload } = e.data;
+const cancelledTasks = new Set<string>();
+const acknowledgementWaiters = new Map<string, () => void>();
+
+type WorkerRequest = {
+  type: 'CALCULATE_TOKENS' | 'GET_EXTRACTION_CHUNKS' | 'TOKEN_CHUNK_ACK' | 'EXTRACTION_CHUNK_ACK' | 'CANCEL_TASK';
+  payload: {
+    requestId: string;
+    fileBuffer?: ArrayBuffer;
+    index?: number;
+  };
+};
+
+const acknowledgementKey = (requestId: string, kind: 'token' | 'extraction', index: number) =>
+  `${requestId}:${kind}:${index}`;
+
+const waitForAcknowledgement = (requestId: string, kind: 'token' | 'extraction', index: number) =>
+  new Promise<void>((resolve) => {
+    acknowledgementWaiters.set(acknowledgementKey(requestId, kind, index), resolve);
+  });
+
+const cancelTask = (requestId: string) => {
+  cancelledTasks.add(requestId);
+  for (const [key, resolve] of acknowledgementWaiters) {
+    if (key.startsWith(`${requestId}:`)) {
+      acknowledgementWaiters.delete(key);
+      resolve();
+    }
+  }
+};
+
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+  const { type, payload } = event.data;
+  const { requestId } = payload;
+
+  if (type === 'CANCEL_TASK') {
+    cancelTask(requestId);
+    self.postMessage({ type: 'TASK_CANCELLED', payload: { requestId } });
+    return;
+  }
+
+  if (type === 'TOKEN_CHUNK_ACK' || type === 'EXTRACTION_CHUNK_ACK') {
+    const kind = type === 'TOKEN_CHUNK_ACK' ? 'token' : 'extraction';
+    const key = acknowledgementKey(requestId, kind, payload.index ?? 0);
+    acknowledgementWaiters.get(key)?.();
+    acknowledgementWaiters.delete(key);
+    return;
+  }
+
+  const fileBuffer = payload.fileBuffer;
+  if (!fileBuffer) {
+    self.postMessage({ type: 'ERROR', payload: { requestId, message: 'PDF data is missing' } });
+    return;
+  }
 
   try {
     if (type === 'CALCULATE_TOKENS') {
-      const { fileBuffer } = payload;
       const pdfDoc = await PDFDocument.load(fileBuffer);
       const pageCount = pdfDoc.getPageCount();
-      
-      self.postMessage({ type: 'TOTAL_PAGES', payload: { pageCount } });
+      assertPdfPageLimit(pageCount);
 
-      if (pageCount <= 1000) {
+      self.postMessage({ type: 'TOTAL_PAGES', payload: { requestId, pageCount } });
+
+      if (pageCount <= 1_000) {
+        if (cancelledTasks.has(requestId)) return;
         const base64 = uint8ArrayToBase64(new Uint8Array(fileBuffer));
-        self.postMessage({ type: 'TOKEN_CHUNK', payload: { base64, isLast: true } });
+        self.postMessage({ type: 'TOKEN_CHUNK', payload: { requestId, index: 0, base64, isLast: true } });
+        await waitForAcknowledgement(requestId, 'token', 0);
       } else {
-        const CHUNK_SIZE = 500;
-        const totalChunks = Math.ceil(pageCount / CHUNK_SIZE);
-        for (let i = 0; i < totalChunks; i++) {
-          const start = i * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, pageCount);
-          const pageIndices = Array.from({ length: end - start }, (_, k) => start + k);
+        const chunkSize = 500;
+        const totalChunks = Math.ceil(pageCount / chunkSize);
+        for (let index = 0; index < totalChunks; index++) {
+          if (cancelledTasks.has(requestId)) return;
+          const start = index * chunkSize;
+          const end = Math.min(start + chunkSize, pageCount);
+          const pageIndices = Array.from({ length: end - start }, (_, offset) => start + offset);
           const chunkPdf = await PDFDocument.create();
           const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
-          copiedPages.forEach(page => chunkPdf.addPage(page));
-          const chunkBytes = await chunkPdf.save();
-          const base64 = uint8ArrayToBase64(chunkBytes);
-          self.postMessage({ type: 'TOKEN_CHUNK', payload: { base64, isLast: i === totalChunks - 1 } });
+          copiedPages.forEach((page) => chunkPdf.addPage(page));
+          const base64 = uint8ArrayToBase64(await chunkPdf.save());
+          self.postMessage({
+            type: 'TOKEN_CHUNK',
+            payload: { requestId, index, base64, isLast: index === totalChunks - 1 },
+          });
+          await waitForAcknowledgement(requestId, 'token', index);
         }
       }
     } else if (type === 'GET_EXTRACTION_CHUNKS') {
-      const { fileBuffer } = payload;
       const pdfDoc = await PDFDocument.load(fileBuffer);
       const pdfjsDoc = await pdfjsLib.getDocument({ data: fileBuffer }).promise;
       const pageCount = pdfDoc.getPageCount();
-      
-      const CHUNK_SIZE = 5;
-      const totalChunks = Math.ceil(pageCount / CHUNK_SIZE);
-      
-      self.postMessage({ type: 'TOTAL_CHUNKS', payload: { totalChunks, pageCount } });
+      assertPdfPageLimit(pageCount);
 
-      for (let i = 0; i < totalChunks; i++) {
-        const startPage = i * CHUNK_SIZE;
-        const endPage = Math.min(startPage + CHUNK_SIZE, pageCount) - 1;
+      const chunkSize = 5;
+      const totalChunks = Math.ceil(pageCount / chunkSize);
+      self.postMessage({ type: 'TOTAL_CHUNKS', payload: { requestId, totalChunks, pageCount } });
+
+      for (let index = 0; index < totalChunks; index++) {
+        if (cancelledTasks.has(requestId)) return;
+        const startPage = index * chunkSize;
+        const endPage = Math.min(startPage + chunkSize, pageCount) - 1;
         let chunkRawText = '';
+
         try {
-          for (let p = startPage + 1; p <= endPage + 1; p++) {
-            const page = await pdfjsDoc.getPage(p);
+          for (let pageNumber = startPage + 1; pageNumber <= endPage + 1; pageNumber++) {
+            if (cancelledTasks.has(requestId)) return;
+            const page = await pdfjsDoc.getPage(pageNumber);
             const textContent = await page.getTextContent();
-            chunkRawText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+            chunkRawText += textContent.items
+              .map((item) => ('str' in item ? item.str : ''))
+              .join(' ') + '\n';
+            page.cleanup();
           }
-        } catch (e) {
-          console.warn(`Worker failed to extract raw text for chunk ${i}`, e);
+        } catch (error) {
+          console.warn(`Worker failed to extract raw text for chunk ${index}`, error);
         }
 
-        // Text-based PDFs do not need an additional PDF copy. Only create a
-        // mini-PDF when OCR is required, which sharply reduces memory use for
-        // long documents.
         let chunkBase64: string | undefined;
         if (chunkRawText.replace(/\s+/g, '').length <= 10) {
-          const pageIndices = Array.from({ length: endPage - startPage + 1 }, (_, idx) => startPage + idx);
+          const pageIndices = Array.from(
+            { length: endPage - startPage + 1 },
+            (_, offset) => startPage + offset,
+          );
           const chunkPdf = await PDFDocument.create();
           const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
           copiedPages.forEach((page) => chunkPdf.addPage(page));
           chunkBase64 = uint8ArrayToBase64(await chunkPdf.save());
         }
-        
-        self.postMessage({ 
-          type: 'EXTRACTION_CHUNK', 
-          payload: { 
-            index: i, 
-            base64: chunkBase64, 
+
+        self.postMessage({
+          type: 'EXTRACTION_CHUNK',
+          payload: {
+            requestId,
+            index,
+            base64: chunkBase64,
             rawText: chunkRawText,
-            isLast: i === totalChunks - 1
-          } 
+            isLast: index === totalChunks - 1,
+          },
         });
+        await waitForAcknowledgement(requestId, 'extraction', index);
       }
+
+      await pdfjsDoc.destroy();
     }
-  } catch (err: unknown) {
-    self.postMessage({
-      type: 'ERROR',
-      payload: { message: err instanceof Error ? err.message : 'Unknown PDF worker error' },
-    });
+  } catch (error: unknown) {
+    if (!cancelledTasks.has(requestId)) {
+      self.postMessage({
+        type: 'ERROR',
+        payload: { requestId, message: error instanceof Error ? error.message : 'Unknown PDF worker error' },
+      });
+    }
+  } finally {
+    cancelledTasks.delete(requestId);
   }
 };

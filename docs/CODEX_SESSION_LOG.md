@@ -73,3 +73,22 @@ Decision:
 - Store portable, sanitized project memory in `AGENTS.md` and the `docs/CODEX_*.md` files.
 - Future Codex sessions should update these records after material work.
 - Never store API keys, credentials, hidden prompts, internal reasoning, or unnecessary personal data.
+
+### Priority source-code improvements
+
+User requests:
+
+> Scan the source code and list further optimization opportunities.
+
+> Implement the recommended priority items first.
+
+Decisions and outcome:
+
+- Hardened PDF printing so filenames and translated content are inserted through DOM APIs rather than HTML string interpolation.
+- Added a production Content Security Policy and related browser security headers.
+- Added request IDs, cancellation, stale-result protection, and acknowledgement backpressure to PDF worker operations.
+- Changed API key persistence to tab-session storage by default, with an explicit remember-on-device option.
+- Persisted character maps and plot summaries in IndexedDB so resumed translations retain their working context.
+- Added real 50 MB PDF, 12 MB Markdown, and 3,600-page PDF limits shared across upload, worker, and conversion paths.
+- Added a stop-and-resume translation control that keeps completed progress.
+- Validation: strict TypeScript, 10 unit tests, and production build passed.

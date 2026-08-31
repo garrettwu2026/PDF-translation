@@ -9,7 +9,7 @@
     "build": "vite build --configLoader runner",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/text.test.ts tests/epub.test.ts",
+    "test": "node --experimental-strip-types --test tests/text.test.ts tests/epub.test.ts tests/file-limits.test.ts",
     "check": "npm run lint && npm run test && npm run build"
   },
   "dependencies": {

@@ -12,6 +12,8 @@ export interface HistoryRecord {
   model: string;
   translationStyle?: string;
   glossaryText?: string;
+  characterMap?: string;
+  plotSummary?: string;
 }
 
 const DB_NAME = 'pdf-translator-db';

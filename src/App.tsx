@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock, Info } from 'lucide-react';
 import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
 import { splitTextIntoChunks } from './lib/text';
+import { assertPdfPageLimit, MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
 
 type ModelConfig = {
   id: string;
@@ -28,20 +29,41 @@ const MODELS: ModelConfig[] = [
 ];
 
 const DEFAULT_MODEL_ID = 'gemini-3.7-flash';
-
 const LOCAL_STORAGE_KEY_NAME = '__pdf_translator_api_key_v1__';
 const LOCAL_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_v1__';
+const SESSION_STORAGE_KEY_NAME = '__pdf_translator_api_key_session_v1__';
+const SESSION_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_session_v1__';
 
-const encryptKey = (key: string) => {
+// Encoding only prevents accidental plain-text display in storage tools. It is
+// not encryption; session storage is therefore the safe default.
+const encodeStoredKey = (key: string) => {
   return window.btoa(key.split('').reverse().join(''));
 };
 
-const decryptKey = (key: string) => {
+const decodeStoredKey = (key: string) => {
   try {
     return window.atob(key).split('').reverse().join('');
   } catch (e) {
     return '';
   }
+};
+
+const readStoredKey = (sessionName: string, localName: string) => {
+  const saved = sessionStorage.getItem(sessionName) ?? localStorage.getItem(localName);
+  return saved ? decodeStoredKey(saved) : '';
+};
+
+const persistStoredKey = (
+  key: string,
+  sessionName: string,
+  localName: string,
+  rememberOnDevice: boolean,
+) => {
+  sessionStorage.removeItem(sessionName);
+  localStorage.removeItem(localName);
+  if (!key) return;
+  const target = rememberOnDevice ? localStorage : sessionStorage;
+  target.setItem(rememberOnDevice ? localName : sessionName, encodeStoredKey(key));
 };
 
 export default function App() {
@@ -117,6 +139,8 @@ export default function App() {
     setSelectedModel(restoredModel);
     setTranslationStyle(record.translationStyle || null);
     setGlossary(record.glossaryText || '無');
+    setCharacterMap(record.characterMap || '');
+    setPlotSummary(record.plotSummary || '');
     
     setFile(null);
     setBase64Data(null);
@@ -160,30 +184,25 @@ export default function App() {
     toastTimeoutRef.current = setTimeout(() => setToast(null), 5000);
   };
   const [error, setError] = useState<string | null>(null);
-  const [manualApiKey, setManualApiKey] = useState(() => {
-    const saved = localStorage.getItem(LOCAL_STORAGE_KEY_NAME);
-    return saved ? decryptKey(saved) : '';
-  });
-  const [isManualKeyActive, setIsManualKeyActive] = useState(() => {
-    const saved = localStorage.getItem(LOCAL_STORAGE_KEY_NAME);
-    const key = saved ? decryptKey(saved) : '';
-    return key.length > 20;
-  });
-  const [manualOpenaiApiKey, setManualOpenaiApiKey] = useState(() => {
-    const saved = localStorage.getItem(LOCAL_STORAGE_OPENAI_KEY_NAME);
-    return saved ? decryptKey(saved) : '';
-  });
-  const [isOpenaiKeyActive, setIsOpenaiKeyActive] = useState(() => {
-    const saved = localStorage.getItem(LOCAL_STORAGE_OPENAI_KEY_NAME);
-    const key = saved ? decryptKey(saved) : '';
-    return key.length > 10;
-  });
+  const [manualApiKey, setManualApiKey] = useState(() =>
+    readStoredKey(SESSION_STORAGE_KEY_NAME, LOCAL_STORAGE_KEY_NAME));
+  const [isManualKeyActive, setIsManualKeyActive] = useState(() =>
+    readStoredKey(SESSION_STORAGE_KEY_NAME, LOCAL_STORAGE_KEY_NAME).length > 20);
+  const [manualOpenaiApiKey, setManualOpenaiApiKey] = useState(() =>
+    readStoredKey(SESSION_STORAGE_OPENAI_KEY_NAME, LOCAL_STORAGE_OPENAI_KEY_NAME));
+  const [isOpenaiKeyActive, setIsOpenaiKeyActive] = useState(() =>
+    readStoredKey(SESSION_STORAGE_OPENAI_KEY_NAME, LOCAL_STORAGE_OPENAI_KEY_NAME).length > 10);
+  const [rememberApiKeys, setRememberApiKeys] = useState(() =>
+    Boolean(localStorage.getItem(LOCAL_STORAGE_KEY_NAME) || localStorage.getItem(LOCAL_STORAGE_OPENAI_KEY_NAME)));
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [estimatedRemainingTime, setEstimatedRemainingTime] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfWorkerRef = useRef<Worker | null>(null);
+  const tokenWorkerTaskRef = useRef<string | null>(null);
+  const extractionWorkerTaskRef = useRef<string | null>(null);
+  const translationCancelledRef = useRef(false);
 
   useEffect(() => {
     // Initialize PDF worker
@@ -194,6 +213,12 @@ export default function App() {
     }
     
     return () => {
+      if (tokenWorkerTaskRef.current) {
+        pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: tokenWorkerTaskRef.current } });
+      }
+      if (extractionWorkerTaskRef.current) {
+        pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: extractionWorkerTaskRef.current } });
+      }
       pdfWorkerRef.current?.terminate();
       if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     };
@@ -203,8 +228,15 @@ export default function App() {
 
   useEffect(() => {
     if (base64Data && file) {
-      calculateTokens(base64Data, selectedModel, file);
+      void calculateTokens(base64Data, selectedModel, file);
     }
+    return () => {
+      const requestId = tokenWorkerTaskRef.current;
+      if (requestId) {
+        pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId } });
+        tokenWorkerTaskRef.current = null;
+      }
+    };
   }, [selectedModel, base64Data, file]);
 
   const generateContentWrapper = async (options: {
@@ -323,12 +355,25 @@ export default function App() {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
     
-    const isPdf = selectedFile.type === 'application/pdf';
-    const isMd = selectedFile.name.toLowerCase().endsWith('.md');
-
-    if (!isPdf && !isMd) {
-      setError('請上傳 PDF 或 Markdown 檔案 (Please upload a PDF or MD file).');
+    let isPdf = false;
+    let isMd = false;
+    try {
+      const upload = validateUpload(selectedFile);
+      isPdf = upload.kind === 'pdf';
+      isMd = upload.kind === 'markdown';
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '檔案格式或大小不符合限制。');
+      e.target.value = '';
       return;
+    }
+
+    if (tokenWorkerTaskRef.current) {
+      pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: tokenWorkerTaskRef.current } });
+      tokenWorkerTaskRef.current = null;
+    }
+    if (extractionWorkerTaskRef.current) {
+      pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: extractionWorkerTaskRef.current } });
+      extractionWorkerTaskRef.current = null;
     }
     
     setError(null);
@@ -343,6 +388,8 @@ export default function App() {
     setTotalChunks(0);
     setTranslationStyle(null);
     setGlossary('無');
+    setCharacterMap('');
+    setPlotSummary('');
     setCustomTitle('');
     
     const reader = new FileReader();
@@ -363,8 +410,14 @@ export default function App() {
   };
 
   const calculateTokens = async (base64: string, modelId: string, currentFile?: File) => {
+    const requestId = crypto.randomUUID();
+    if (tokenWorkerTaskRef.current) {
+      pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: tokenWorkerTaskRef.current } });
+    }
+    tokenWorkerTaskRef.current = requestId;
     setIsCalculating(true);
     setError(null);
+    const isCurrentRequest = () => tokenWorkerTaskRef.current === requestId;
     try {
       const selectedModelData = MODELS.find(m => m.id === modelId)!;
       const fileToUse = currentFile || file;
@@ -375,7 +428,7 @@ export default function App() {
         const estimatedTokens = isMd
           ? Math.ceil((await fileToUse.text()).length * 0.5)
           : Math.ceil(fileToUse.size / 4);
-        setTokenCount(estimatedTokens);
+        if (isCurrentRequest()) setTokenCount(estimatedTokens);
       };
 
       if (selectedModelData.provider === 'openai') {
@@ -405,7 +458,7 @@ export default function App() {
           }
         });
         totalTokens = response.totalTokens ?? 0;
-        setTokenCount(Math.round(totalTokens));
+        if (isCurrentRequest()) setTokenCount(Math.round(totalTokens));
       } else {
         const arrayBuffer = await fileToUse.arrayBuffer();
         
@@ -416,9 +469,10 @@ export default function App() {
         return new Promise<void>((resolve, reject) => {
           const handleMessage = async (e: MessageEvent) => {
             const { type, payload } = e.data;
+            if (payload?.requestId !== requestId) return;
             
             if (type === 'TOTAL_PAGES') {
-              setTotalPages(payload.pageCount);
+              if (isCurrentRequest()) setTotalPages(payload.pageCount);
             } else if (type === 'TOKEN_CHUNK') {
               try {
                 const response = await ai.models.countTokens({
@@ -431,34 +485,47 @@ export default function App() {
                   }
                 });
                 totalTokens += response.totalTokens ?? 0;
+                pdfWorkerRef.current?.postMessage({
+                  type: 'TOKEN_CHUNK_ACK',
+                  payload: { requestId, index: payload.index },
+                });
                 if (payload.isLast) {
-                  setTokenCount(Math.round(totalTokens));
+                  if (isCurrentRequest()) setTokenCount(Math.round(totalTokens));
                   pdfWorkerRef.current?.removeEventListener('message', handleMessage);
                   resolve();
                 }
               } catch (err) {
+                pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId } });
                 pdfWorkerRef.current?.removeEventListener('message', handleMessage);
                 reject(err);
               }
             } else if (type === 'ERROR') {
               pdfWorkerRef.current?.removeEventListener('message', handleMessage);
               reject(new Error(payload.message));
+            } else if (type === 'TASK_CANCELLED') {
+              pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+              resolve();
             }
           };
 
           pdfWorkerRef.current?.addEventListener('message', handleMessage);
           pdfWorkerRef.current?.postMessage({
             type: 'CALCULATE_TOKENS', 
-            payload: { fileBuffer: arrayBuffer } 
+            payload: { requestId, fileBuffer: arrayBuffer }
           }, [arrayBuffer]);
         });
       }
     } catch (err: any) {
-      console.error(err);
-      setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
-      setTokenCount(null);
+      if (isCurrentRequest()) {
+        console.error(err);
+        setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
+        setTokenCount(null);
+      }
     } finally {
-      setIsCalculating(false);
+      if (isCurrentRequest()) {
+        tokenWorkerTaskRef.current = null;
+        setIsCalculating(false);
+      }
     }
   };
 
@@ -487,13 +554,18 @@ export default function App() {
       setTranslatedText('');
       setTranslationStyle(null);
       setGlossary('無');
+      setCharacterMap('');
+      setPlotSummary('');
     }
     
+    translationCancelledRef.current = false;
     setIsTranslating(true);
     setTranslationStage(extractedText && startingChunk > 0 ? 'translating' : 'extracting');
     if (startingChunk === 0) {
       setTranslatedText('');
       setTranslationStyle(null);
+      setCharacterMap('');
+      setPlotSummary('');
     }
     setStatusMessage('');
     setError(null);
@@ -508,11 +580,25 @@ export default function App() {
     let latestTranslatedText = translatedText;
     let latestChunk = startingChunk;
     let latestTotalChunks = totalChunks;
+    let latestTranslationStyle = startingChunk === 0 ? null : translationStyle;
+    let latestGlossary = startingChunk === 0 ? '無' : glossary;
+    let latestCharacterMap = startingChunk === 0 ? '' : characterMap;
+    let latestPlotSummary = startingChunk === 0 ? '' : plotSummary;
 
     try {
       setCurrentFileId(fileId);
       
-      const saveCurrentState = async (status: 'translating' | 'completed' | 'error', current: number, total: number, extracted: string, translated: string, currentStyle: string | null, currentGlossary: string) => {
+      const saveCurrentState = async (
+        status: 'translating' | 'completed' | 'error',
+        current: number,
+        total: number,
+        extracted: string,
+        translated: string,
+        currentStyle: string | null,
+        currentGlossary: string,
+        currentCharacters: string,
+        currentPlotSummary: string,
+      ) => {
         const record: HistoryRecord = {
           id: fileId,
           title: customTitle || file?.name || 'Untitled',
@@ -526,7 +612,9 @@ export default function App() {
           timestamp: Date.now(),
           model: selectedModel,
           translationStyle: currentStyle || undefined,
-          glossaryText: currentGlossary || undefined
+          glossaryText: currentGlossary || undefined,
+          characterMap: currentCharacters || undefined,
+          plotSummary: currentPlotSummary || undefined,
         };
         try {
           await saveHistory(record);
@@ -554,10 +642,20 @@ export default function App() {
         const results: string[] = [];
         let completedExtractions = 0;
         let totalExtractionChunks = 0;
+        const extractionRequestId = crypto.randomUUID();
+        if (extractionWorkerTaskRef.current) {
+          pdfWorkerRef.current?.postMessage({
+            type: 'CANCEL_TASK',
+            payload: { requestId: extractionWorkerTaskRef.current },
+          });
+        }
+        extractionWorkerTaskRef.current = extractionRequestId;
 
-        await new Promise<void>((resolve, reject) => {
+        try {
+          await new Promise<void>((resolve, reject) => {
           const handleMessage = async (e: MessageEvent) => {
             const { type, payload } = e.data;
+            if (payload?.requestId !== extractionRequestId) return;
             
             if (type === 'TOTAL_CHUNKS') {
               totalExtractionChunks = payload.totalChunks;
@@ -568,6 +666,7 @@ export default function App() {
               
               // Process the chunk using Gemini API on the main thread
               try {
+                if (translationCancelledRef.current) throw new Error('PDF 處理已取消');
                 const rawTextLength = rawText.replace(/\s+/g, '').length;
                 const hasRawText = rawTextLength > 10;
                 
@@ -594,6 +693,7 @@ export default function App() {
                       base64Pdf: hasRawText ? undefined : base64,
                       temperature: 0.1
                     });
+                    if (translationCancelledRef.current) throw new Error('PDF 處理已取消');
                     
                     if (response.usageMetadata) {
                       setActualInputTokens(prev => prev + (response.usageMetadata?.promptTokenCount || 0));
@@ -625,26 +725,43 @@ export default function App() {
                 latestExtractedText = results.filter(r => r !== undefined).join('\n\n');
                 setExtractedText(latestExtractedText);
 
+                pdfWorkerRef.current?.postMessage({
+                  type: 'EXTRACTION_CHUNK_ACK',
+                  payload: { requestId: extractionRequestId, index },
+                });
+
                 if (totalExtractionChunks > 0 && completedExtractions === totalExtractionChunks) {
                   pdfWorkerRef.current?.removeEventListener('message', handleMessage);
                   resolve();
                 }
               } catch (err) {
+                pdfWorkerRef.current?.postMessage({
+                  type: 'CANCEL_TASK',
+                  payload: { requestId: extractionRequestId },
+                });
                 pdfWorkerRef.current?.removeEventListener('message', handleMessage);
                 reject(err);
               }
             } else if (type === 'ERROR') {
               pdfWorkerRef.current?.removeEventListener('message', handleMessage);
               reject(new Error(payload.message));
+            } else if (type === 'TASK_CANCELLED') {
+              pdfWorkerRef.current?.removeEventListener('message', handleMessage);
+              reject(new Error('PDF 處理已取消'));
             }
           };
 
           pdfWorkerRef.current?.addEventListener('message', handleMessage);
           pdfWorkerRef.current?.postMessage({
             type: 'GET_EXTRACTION_CHUNKS', 
-            payload: { fileBuffer: arrayBuffer } 
+            payload: { requestId: extractionRequestId, fileBuffer: arrayBuffer }
           }, [arrayBuffer]);
-        });
+          });
+        } finally {
+          if (extractionWorkerTaskRef.current === extractionRequestId) {
+            extractionWorkerTaskRef.current = null;
+          }
+        }
 
         fullMarkdown = results.join('\n\n').trim();
         latestExtractedText = fullMarkdown;
@@ -726,6 +843,9 @@ export default function App() {
           setTranslationStyle(detectedStyle);
           setGlossary(glossaryText);
           setCharacterMap(detectedCharacters);
+          latestTranslationStyle = detectedStyle;
+          latestGlossary = glossaryText;
+          latestCharacterMap = detectedCharacters;
         } catch (err) {
           console.warn("Analysis failed, continuing with defaults.", err);
           setTranslationStyle('一般/通用');
@@ -755,6 +875,7 @@ export default function App() {
       let dynamicPlotSummary = plotSummary;
       
       for (let i = startChunk; i < translationChunksCount; i++) {
+        if (translationCancelledRef.current) throw new Error('翻譯已取消');
         latestChunk = i + 1;
         setCurrentChunk(i + 1);
         setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
@@ -816,6 +937,7 @@ ${textChunks[i]}`;
             });
             
             for await (const chunk of responseStream) {
+              if (translationCancelledRef.current) throw new Error('翻譯已取消');
               const text = chunk.text || '';
               currentChunkTranslated += text;
               setTranslatedText(fullTranslatedText + currentChunkTranslated);
@@ -893,6 +1015,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               temperature: 0,
               jsonMode: true
             });
+            if (translationCancelledRef.current) throw new Error('翻譯已取消');
 
             try {
               const correctionResult = JSON.parse(correctionResponse.text || '{}');
@@ -921,12 +1044,14 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                 const newTermsStr = correctionResult.newTerms.join('\n');
                 dynamicGlossary += (dynamicGlossary === '無' ? '' : '\n') + newTermsStr;
                 setGlossary(dynamicGlossary);
+                latestGlossary = dynamicGlossary;
               }
 
               if (correctionResult.newCharacters && correctionResult.newCharacters.length > 0) {
                 const newCharsStr = correctionResult.newCharacters.join('\n');
                 dynamicCharacterMap += (dynamicCharacterMap === '無' ? '' : '\n') + newCharsStr;
                 setCharacterMap(dynamicCharacterMap);
+                latestCharacterMap = dynamicCharacterMap;
               }
 
               if (correctionResult.chunkSummary) {
@@ -937,6 +1062,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   dynamicPlotSummary = summaryLines.slice(-10).join('\n');
                 }
                 setPlotSummary(dynamicPlotSummary);
+                latestPlotSummary = dynamicPlotSummary;
               }
             } catch (e) {
               console.warn("Failed to parse correction response, using draft translation.", e);
@@ -971,7 +1097,17 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         previousSourceText = textChunks[i].slice(-1000);
         
         // Save progress to IndexedDB
-        await saveCurrentState('translating', i + 1, translationChunksCount, fullMarkdown, fullTranslatedText, detectedStyle, dynamicGlossary);
+        await saveCurrentState(
+          'translating',
+          i + 1,
+          translationChunksCount,
+          fullMarkdown,
+          fullTranslatedText,
+          detectedStyle,
+          dynamicGlossary,
+          dynamicCharacterMap,
+          dynamicPlotSummary,
+        );
         
         // Estimation update
         const now = Date.now();
@@ -987,15 +1123,30 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         }
       }
       
-      await saveCurrentState('completed', translationChunksCount, translationChunksCount, fullMarkdown, fullTranslatedText, detectedStyle, dynamicGlossary);
+      await saveCurrentState(
+        'completed',
+        translationChunksCount,
+        translationChunksCount,
+        fullMarkdown,
+        fullTranslatedText,
+        detectedStyle,
+        dynamicGlossary,
+        dynamicCharacterMap,
+        dynamicPlotSummary,
+      );
       
       if (fullTranslatedText && autoDownload !== 'none') {
         setPendingDownload(autoDownload);
       }
       
     } catch (err: any) {
-      console.error(err);
-      setError(`翻譯失敗 (Translation failed): ${err.message}`);
+      const wasCancelled = translationCancelledRef.current;
+      if (wasCancelled) {
+        showToast('翻譯已停止，完成的進度可以從歷史紀錄繼續。', 'success');
+      } else {
+        console.error(err);
+        setError(`翻譯失敗 (Translation failed): ${err.message}`);
+      }
       if (fileId) {
         const record: HistoryRecord = {
           id: fileId,
@@ -1006,19 +1157,35 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
           translatedText: latestTranslatedText,
           currentChunk: latestChunk,
           totalChunks: latestTotalChunks,
-          status: 'error',
+          status: wasCancelled ? 'translating' : 'error',
           timestamp: Date.now(),
           model: selectedModel,
-          translationStyle: translationStyle || undefined,
-          glossaryText: glossary || undefined
+          translationStyle: latestTranslationStyle || undefined,
+          glossaryText: latestGlossary || undefined,
+          characterMap: latestCharacterMap || undefined,
+          plotSummary: latestPlotSummary || undefined,
         };
-        await saveHistory(record);
-        loadHistory();
+        try {
+          await saveHistory(record);
+          void loadHistory();
+        } catch (historyError) {
+          console.warn('Unable to save stopped or failed translation progress', historyError);
+        }
       }
     } finally {
+      translationCancelledRef.current = false;
       setIsTranslating(false);
       setTranslationStage(null);
       setStatusMessage('');
+    }
+  };
+
+  const handleCancelTranslation = () => {
+    translationCancelledRef.current = true;
+    setStatusMessage('正在安全停止翻譯...');
+    const requestId = extractionWorkerTaskRef.current;
+    if (requestId) {
+      pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId } });
     }
   };
 
@@ -1050,7 +1217,6 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
       const element = document.getElementById('translation-result-content');
       if (!element) throw new Error("找不到內容元素");
 
-      const contentHtml = element.innerHTML;
       const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
       const defaultTitle = activeTab === 'translate' 
         ? `${baseName}_翻譯`
@@ -1069,99 +1235,42 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
       const iframeDoc = iframe.contentWindow?.document;
       if (!iframeDoc) throw new Error("無法建立列印環境");
 
-      // 寫入內容與專為 PDF 優化的列印樣式
+      // Build the print document with DOM APIs. User-controlled titles and
+      // rendered content are never interpolated into executable HTML.
       iframeDoc.open();
-      iframeDoc.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>${defaultTitle}</title>
-            <style>
-              @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
-              
-              body { 
-                font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif; 
-                padding: 20mm; 
-                color: #000000; 
-                background: #ffffff;
-                line-height: 1.6;
-                font-size: 12pt;
-              }
-              
-              /* 確保長文件分頁正常 */
-              * { 
-                box-sizing: border-box; 
-                -webkit-print-color-adjust: exact; 
-                print-color-adjust: exact;
-              }
-              
-              h1 { font-size: 24pt; border-bottom: 2px solid #333; padding-bottom: 10px; margin-top: 0; }
-              h2 { font-size: 20pt; margin-top: 25px; border-bottom: 1px solid #eee; page-break-after: avoid; }
-              h3 { font-size: 16pt; margin-top: 20px; page-break-after: avoid; }
-              
-              p, li { margin-bottom: 10px; word-wrap: break-word; }
-              
-              pre { 
-                background: #f4f4f4 !important; 
-                padding: 15px; 
-                border-radius: 5px; 
-                white-space: pre-wrap; 
-                word-wrap: break-word;
-                font-size: 10pt;
-                border: 1px solid #ddd;
-              }
-              
-              code { 
-                background: #f4f4f4 !important; 
-                padding: 2px 5px; 
-                border-radius: 3px; 
-                font-family: monospace; 
-              }
-              
-              blockquote { 
-                border-left: 5px solid #ddd; 
-                padding-left: 20px; 
-                color: #444; 
-                font-style: italic; 
-                margin: 20px 0;
-              }
-              
-              table { 
-                width: 100%; 
-                border-collapse: collapse; 
-                margin: 20px 0; 
-                page-break-inside: auto;
-              }
-              
-              tr { page-break-inside: avoid; page-break-after: auto; }
-              th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-              th { background: #f9f9f9 !important; }
-              
-              img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
-              
-              @page {
-                size: A4;
-                margin: 15mm;
-              }
-            </style>
-          </head>
-          <body>
-            <div id="content">${contentHtml}</div>
-            <script>
-              window.onload = function() {
-                setTimeout(function() {
-                  window.print();
-                  // 延遲移除 iframe，確保列印對話框已彈出
-                  setTimeout(function() {
-                    window.frameElement.parentNode.removeChild(window.frameElement);
-                  }, 1000);
-                }, 500);
-              };
-            </script>
-          </body>
-        </html>
-      `);
+      iframeDoc.write('<!doctype html><html><head></head><body></body></html>');
       iframeDoc.close();
+
+      iframeDoc.title = defaultTitle;
+      const style = iframeDoc.createElement('style');
+      style.textContent = `
+        body { font-family: "Microsoft JhengHei", "PingFang TC", sans-serif; padding: 20mm; color: #000; background: #fff; line-height: 1.6; font-size: 12pt; }
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        h1 { font-size: 24pt; border-bottom: 2px solid #333; padding-bottom: 10px; margin-top: 0; }
+        h2 { font-size: 20pt; margin-top: 25px; border-bottom: 1px solid #eee; page-break-after: avoid; }
+        h3 { font-size: 16pt; margin-top: 20px; page-break-after: avoid; }
+        p, li { margin-bottom: 10px; overflow-wrap: anywhere; }
+        pre { background: #f4f4f4; padding: 15px; border-radius: 5px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10pt; border: 1px solid #ddd; }
+        code { background: #f4f4f4; padding: 2px 5px; border-radius: 3px; font-family: monospace; }
+        blockquote { border-left: 5px solid #ddd; padding-left: 20px; color: #444; font-style: italic; margin: 20px 0; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; page-break-inside: auto; }
+        tr { page-break-inside: avoid; page-break-after: auto; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f9f9f9; }
+        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+        @page { size: A4; margin: 15mm; }
+      `;
+      iframeDoc.head.appendChild(style);
+
+      const printContent = element.cloneNode(true) as HTMLElement;
+      printContent.removeAttribute('id');
+      iframeDoc.body.appendChild(printContent);
+
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        setTimeout(() => iframe.remove(), 1000);
+      }, 300);
 
       showToast('請在列印對話框中選擇「另存為 PDF」', 'success');
     } catch (err: any) {
@@ -1256,6 +1365,12 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         pdfjsLib.GlobalWorkerOptions.workerSrc = workerModule.default;
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         const numPages = pdf.numPages;
+        try {
+          assertPdfPageLimit(numPages);
+        } catch (pageError) {
+          await pdf.destroy();
+          throw pageError;
+        }
         
         for (let i = 1; i <= numPages; i++) {
           setStatusMessage(`提取文字中 (第 ${i}/${numPages} 頁)...`);
@@ -1264,7 +1379,9 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
           const pageText = textContent.items.map((item: any) => item.str).join(' ');
           fullText += pageText + '\n\n';
           setExtractedText(fullText);
+          page.cleanup();
         }
+        await pdf.destroy();
       }
       
       setStatusMessage('正在產生 EPUB...');
@@ -1592,7 +1709,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   <div className="flex flex-col items-center">
                     <FileUp className="w-10 h-10 text-slate-500 mb-3" />
                     <p className="font-medium text-slate-300">點擊或拖曳上傳 PDF</p>
-                    <p className="text-sm text-slate-500 mt-1">支援最大 3600 頁的文件</p>
+                    <p className="text-sm text-slate-500 mt-1">PDF 最大 50 MB／3,600 頁</p>
                   </div>
                 )}
               </div>
@@ -1833,23 +1950,35 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               </div>
               
               {activeTab === 'translate' ? (
-                <button
-                  onClick={handleTranslate}
-                  disabled={!file || isCalculating || isTranslating || isExtracting}
-                  className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
-                >
-                  {isTranslating ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-                      <span className="text-white">{statusMessage ? statusMessage : (totalChunks > 0 ? `翻譯中 (第 ${currentChunk}/${totalChunks} 部分)...` : '準備中...')}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-5 h-5" />
-                      確認翻譯
-                    </>
+                <div className="space-y-2.5">
+                  <button
+                    onClick={handleTranslate}
+                    disabled={(!file && !extractedText) || isCalculating || isTranslating || isExtracting}
+                    className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
+                  >
+                    {isTranslating ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                        <span className="text-white">{statusMessage ? statusMessage : (totalChunks > 0 ? `翻譯中 (第 ${currentChunk}/${totalChunks} 部分)...` : '準備中...')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-5 h-5" />
+                        確認翻譯
+                      </>
+                    )}
+                  </button>
+                  {isTranslating && (
+                    <button
+                      type="button"
+                      onClick={handleCancelTranslation}
+                      className="w-full py-2.5 px-4 border border-slate-700 bg-white text-slate-500 hover:text-red-500 hover:border-red-300 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                      停止並保留進度
+                    </button>
                   )}
-                </button>
+                </div>
               ) : (
                 <button
                   onClick={handlePdfToEpub}
@@ -2216,7 +2345,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               </div>
               <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
               <p className="text-slate-400 mb-6 text-sm leading-relaxed">
-                使用此翻譯工具需要設定對應的 API Key。金鑰只會儲存在此瀏覽器，並直接傳送給所選的 AI 服務；請勿在共用裝置上儲存。
+                使用此翻譯工具需要設定對應的 API Key。預設只保留到此分頁工作階段結束，並直接傳送給所選的 AI 服務。
               </p>
 
               <div className="text-left space-y-4">
@@ -2248,47 +2377,44 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   />
                 </div>
 
+                <label className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rememberApiKeys}
+                    onChange={(event) => setRememberApiKeys(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-700 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-slate-300">在這台裝置記住金鑰</span>
+                    <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">只建議在自己的私人裝置啟用。瀏覽器儲存空間不是密碼保管庫。</span>
+                  </span>
+                </label>
+
                 <div className="pt-4">
                   <button
                     onClick={() => {
                       const trimmedGoogle = manualApiKey.trim();
                       const trimmedOpenai = manualOpenaiApiKey.trim();
-                      let hasError = false;
-
-                      // Set Google
-                      if (trimmedGoogle === '') {
-                        localStorage.removeItem(LOCAL_STORAGE_KEY_NAME);
-                        setIsManualKeyActive(false);
-                        setManualApiKey('');
-                      } else if (trimmedGoogle.length > 20) {
-                        localStorage.setItem(LOCAL_STORAGE_KEY_NAME, encryptKey(trimmedGoogle));
-                        setIsManualKeyActive(true);
-                        setManualApiKey(trimmedGoogle);
-                      } else {
+                      if (trimmedGoogle !== '' && trimmedGoogle.length <= 20) {
                         showToast("Google API Key 格式不正確", 'error');
-                        hasError = true;
+                        return;
                       }
-
-                      // Set OpenAI
-                      if (trimmedOpenai === '') {
-                        localStorage.removeItem(LOCAL_STORAGE_OPENAI_KEY_NAME);
-                        setIsOpenaiKeyActive(false);
-                        setManualOpenaiApiKey('');
-                      } else if (trimmedOpenai.length > 10) {
-                        localStorage.setItem(LOCAL_STORAGE_OPENAI_KEY_NAME, encryptKey(trimmedOpenai));
-                        setIsOpenaiKeyActive(true);
-                        setManualOpenaiApiKey(trimmedOpenai);
-                      } else {
+                      if (trimmedOpenai !== '' && trimmedOpenai.length <= 10) {
                         showToast("OpenAI API Key 格式不正確", 'error');
-                        hasError = true;
+                        return;
                       }
 
-                      if (hasError) return;
+                      persistStoredKey(trimmedGoogle, SESSION_STORAGE_KEY_NAME, LOCAL_STORAGE_KEY_NAME, rememberApiKeys);
+                      persistStoredKey(trimmedOpenai, SESSION_STORAGE_OPENAI_KEY_NAME, LOCAL_STORAGE_OPENAI_KEY_NAME, rememberApiKeys);
+                      setIsManualKeyActive(trimmedGoogle.length > 20);
+                      setIsOpenaiKeyActive(trimmedOpenai.length > 10);
+                      setManualApiKey(trimmedGoogle);
+                      setManualOpenaiApiKey(trimmedOpenai);
 
                       if (trimmedGoogle === '' && trimmedOpenai === '') {
                         showToast('已清除所有儲存的 API Key', 'success');
                       } else {
-                        showToast('已安全儲存並套用金鑰', 'success');
+                        showToast(rememberApiKeys ? '已在這台裝置記住並套用金鑰' : '已在此分頁工作階段套用金鑰', 'success');
                       }
                       setShowKeyModal(false);
                     }}
@@ -2300,7 +2426,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               </div>
               
               <p className="text-xs text-slate-500 mt-6 text-center">
-                提示：若想清空儲存的金鑰，請將輸入框留空並點擊「儲存並套用」。瀏覽器本機儲存並非密碼保管庫。
+                若要清除金鑰，請將輸入框留空後儲存。金鑰不會傳送到本網站伺服器。
               </p>
             </div>
           </div>

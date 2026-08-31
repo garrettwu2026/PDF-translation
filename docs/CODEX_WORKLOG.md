@@ -35,3 +35,14 @@ All dates use Asia/Taipei unless noted otherwise.
 - Added portable Codex project memory through `AGENTS.md` and `docs/CODEX_*.md`.
 - Validation: strict TypeScript, all 7 unit tests, and the production build passed.
 - Browser visual testing was unavailable during the session because the local Codex browser-control quota was exhausted.
+
+## 2026-08-31 — Priority reliability and security improvements
+
+- Removed HTML interpolation from PDF print export and added production CSP, COOP, HSTS, and related security headers.
+- Added request-scoped PDF worker messages, cancellation, stale-response guards, and per-chunk acknowledgement backpressure to prevent unbounded provider requests.
+- Made tab-session API key storage the default and retained persistent storage only behind an explicit remember-on-device setting.
+- Extended history records with character-map and plot-summary context so interrupted translations resume accurately.
+- Added stop-and-resume behavior that preserves translated chunks and cancels active extraction work.
+- Enforced shared upload limits: 50 MB PDF, 12 MB Markdown, and 3,600 PDF pages.
+- Added file-limit unit coverage, increasing the test suite from 7 to 10 tests.
+- Validation: strict TypeScript, all 10 unit tests, and production build passed.

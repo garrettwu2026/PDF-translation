@@ -25,6 +25,7 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/pdf.worker.ts`: background PDF parsing and OCR preparation
 - `src/lib/db.ts`: browser IndexedDB translation history
 - `src/lib/text.ts`: safe Markdown chunking and binary conversion utilities
+- `src/lib/file-limits.ts`: shared PDF/Markdown upload and PDF page limits
 - `server.ts`: Express/Vite server and health endpoint
 - `server/epub.ts`: EPUB request validation, sanitization, and generation
 - `tests/`: Node test suite
@@ -69,6 +70,9 @@ npm start
 - Do not add server-side provider keys; this is intentionally bring-your-own-key.
 - OpenAI models operate on extracted text and do not directly process scanned PDF input in the current workflow.
 - Preserve IndexedDB history compatibility.
+- API keys default to `sessionStorage`; persistent `localStorage` is only used when the user explicitly enables “remember on this device”. The stored value is encoded, not encrypted.
+- PDF worker messages are request-scoped and use acknowledgement backpressure. Preserve cancellation and stale-response guards when changing extraction or token counting.
+- Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
 - Do not weaken EPUB sanitization or server request limits.
 - Avoid exposing raw API errors, secrets, or uploaded content in logs.
 - Keep desktop and mobile layouts usable.
