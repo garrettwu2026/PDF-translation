@@ -5,14 +5,29 @@ import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, Che
 import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
 import { splitTextIntoChunks } from './lib/text';
 
-const MODELS = [
-  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (最強品質)', provider: 'google', inputPrice: 1.25, outputPrice: 5.00 },
-  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (推薦)', provider: 'google', inputPrice: 1.50, outputPrice: 9.00 },
-  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite (極速)', provider: 'google', inputPrice: 0.0375, outputPrice: 0.15 },
-  { id: 'gpt-5.4-nano', name: 'GPT 5.4 Nano (OpenAI 極速)', provider: 'openai', inputPrice: 0.05, outputPrice: 0.20 },
-  { id: 'gpt-5.4-mini', name: 'GPT 5.4 Mini (OpenAI 推薦)', provider: 'openai', inputPrice: 0.15, outputPrice: 0.60 },
-  { id: 'gpt-5.4-pro', name: 'GPT 5.4 Pro (OpenAI 最強)', provider: 'openai', inputPrice: 2.50, outputPrice: 10.00 },
+type ModelConfig = {
+  id: string;
+  name: string;
+  provider: 'google' | 'openai';
+  inputPrice: number;
+  cachedInputPrice: number;
+  outputPrice: number;
+  badge: string;
+  priceNote?: string;
+};
+
+// Paid-tier standard pricing in USD per 1M tokens, verified against the
+// providers' official pricing pages on 2026-08-31.
+const MODELS: ModelConfig[] = [
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', provider: 'google', inputPrice: 0.75, cachedInputPrice: 0.075, outputPrice: 3.75, badge: '最新推薦', priceNote: '優惠價至 2026/12/31' },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'google', inputPrice: 0.30, cachedInputPrice: 0.03, outputPrice: 2.50, badge: '翻譯省錢' },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', provider: 'google', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '最強品質', priceNote: '單次提示 ≤ 200K tokens' },
+  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'openai', inputPrice: 0.20, cachedInputPrice: 0.02, outputPrice: 1.20, badge: '翻譯省錢' },
+  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'openai', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '均衡推薦' },
+  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai', inputPrice: 4.00, cachedInputPrice: 0.40, outputPrice: 20.00, badge: '最強品質', priceNote: '優惠價至少至 2026/11/21' },
 ];
+
+const DEFAULT_MODEL_ID = 'gemini-3.7-flash';
 
 const LOCAL_STORAGE_KEY_NAME = '__pdf_translator_api_key_v1__';
 const LOCAL_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_v1__';
@@ -35,7 +50,7 @@ export default function App() {
   const [customInstructions, setCustomInstructions] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedText, setExtractedText] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-3.1-flash-lite');
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const [splitTranslation, setSplitTranslation] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string | null>(null);
@@ -96,7 +111,10 @@ export default function App() {
     setTranslatedText(record.translatedText);
     setCurrentChunk(record.currentChunk);
     setTotalChunks(record.totalChunks);
-    setSelectedModel(record.model);
+    const restoredModel = MODELS.some(model => model.id === record.model)
+      ? record.model
+      : DEFAULT_MODEL_ID;
+    setSelectedModel(restoredModel);
     setTranslationStyle(record.translationStyle || null);
     setGlossary(record.glossaryText || '無');
     
@@ -1357,7 +1375,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
     }
   };
 
-  const selectedModelData = MODELS.find(m => m.id === selectedModel)!;
+  const selectedModelData = MODELS.find(m => m.id === selectedModel) ?? MODELS[0];
   
   // The pipeline reads source text multiple times for analysis, translation,
   // proofreading and glossary updates. Keep document tokens separate from the
@@ -1423,7 +1441,10 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
             <div className="bg-blue-600/20 border border-blue-500/30 p-2 rounded-xl shadow-[0_0_15px_rgba(37,99,235,0.2)]">
               <FileText className="w-5 h-5 text-blue-400" />
             </div>
-            <h1 className="text-xl font-semibold tracking-tight text-slate-100">PDF 翻譯神器</h1>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-slate-100">PDF 翻譯神器</h1>
+              <p className="text-[11px] text-slate-500 mt-0.5">Gemini 3.7 × OpenAI GPT-5.6</p>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <button
@@ -1484,6 +1505,13 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-500/20 flex items-center justify-center text-blue-400 font-semibold text-sm shadow-inner">1</div>
                   選擇模型
                 </h2>
+                <div className="mb-5 rounded-xl border border-cyan-500/20 bg-cyan-950/20 px-3.5 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-semibold text-cyan-300">2026 最新模型與官方價格</span>
+                    <span className="rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-400">已更新</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">費用皆為標準 API 每百萬 tokens 美元單價；實際帳單以供應商為準。</p>
+                </div>
                 <div className="space-y-6">
                   <div>
                     <h3 className="text-sm font-semibold text-blue-400 mb-2 pl-1">
@@ -1507,11 +1535,14 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                             onChange={(e) => setSelectedModel(e.target.value)}
                             className="mt-1 text-blue-500 focus:ring-blue-500 bg-slate-950 border-slate-700"
                           />
-                          <div className="ml-3">
-                            <div className="font-medium text-slate-200">{model.name}</div>
-                            <div className="text-xs text-slate-500 mt-0.5">
-                              輸入: ${model.inputPrice}/1M tokens<br/>
-                              輸出: ${model.outputPrice}/1M tokens
+                          <div className="ml-3 min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium text-slate-200">{model.name}</span>
+                              <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-300">{model.badge}</span>
+                            </div>
+                            <div className="text-xs text-slate-500 mt-1 leading-relaxed">
+                              輸入 ${model.inputPrice}・快取 ${model.cachedInputPrice}・輸出 ${model.outputPrice}
+                              <span className="block text-slate-600">每 1M tokens{model.priceNote ? `・${model.priceNote}` : ''}</span>
                             </div>
                           </div>
                         </label>
@@ -1541,11 +1572,14 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                             onChange={(e) => setSelectedModel(e.target.value)}
                             className="mt-1 text-emerald-500 focus:ring-emerald-500 bg-slate-950 border-slate-700"
                           />
-                          <div className="ml-3">
-                            <div className="font-medium text-slate-200">{model.name}</div>
-                            <div className="text-xs text-slate-500 mt-0.5">
-                              輸入: ${model.inputPrice}/1M tokens<br/>
-                              輸出: ${model.outputPrice}/1M tokens
+                          <div className="ml-3 min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium text-slate-200">{model.name}</span>
+                              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">{model.badge}</span>
+                            </div>
+                            <div className="text-xs text-slate-500 mt-1 leading-relaxed">
+                              輸入 ${model.inputPrice}・快取 ${model.cachedInputPrice}・輸出 ${model.outputPrice}
+                              <span className="block text-slate-600">每 1M tokens{model.priceNote ? `・${model.priceNote}` : ''}</span>
                             </div>
                           </div>
                         </label>
