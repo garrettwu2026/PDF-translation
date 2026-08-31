@@ -92,3 +92,18 @@ Decisions and outcome:
 - Added real 50 MB PDF, 12 MB Markdown, and 3,600-page PDF limits shared across upload, worker, and conversion paths.
 - Added a stop-and-resume translation control that keeps completed progress.
 - Validation: strict TypeScript, 10 unit tests, and production build passed.
+
+### Maintenance and cost optimization
+
+User request:
+
+> Introduce maintenance and cost optimization.
+
+Decisions and outcome:
+
+- Combined glossary, character-map, and style analysis into one structured AI request, removing one request and up to roughly 30,000 characters of repeated source input for each newly translated document.
+- Centralized model definitions, pricing, fallback behavior, and cost calculations in a tested module.
+- Lazily loaded the Markdown renderer so users do not download it until a preview is needed.
+- Moved server rate limiting into a tested module and added periodic stale-client pruning to prevent unbounded memory growth.
+- Expanded automated coverage from 10 to 17 tests.
+- Validation: strict TypeScript, 17 unit tests, and production build passed.

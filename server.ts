@@ -8,6 +8,7 @@ import {
   InvalidEpubInputError,
   parseEpubRequest,
 } from './server/epub.ts';
+import { createRateLimiter } from './server/rate-limit.ts';
 
 dotenv.config();
 
@@ -39,24 +40,6 @@ function securityHeaders(_req: express.Request, res: express.Response, next: exp
     );
   }
   next();
-}
-
-function createRateLimiter(limit: number, windowMs: number) {
-  const clients = new Map<string, { count: number; resetAt: number }>();
-  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const now = Date.now();
-    const key = req.ip || 'unknown';
-    const existing = clients.get(key);
-    const entry = !existing || existing.resetAt <= now
-      ? { count: 0, resetAt: now + windowMs }
-      : existing;
-    entry.count += 1;
-    clients.set(key, entry);
-    res.setHeader('RateLimit-Limit', String(limit));
-    res.setHeader('RateLimit-Remaining', String(Math.max(0, limit - entry.count)));
-    if (entry.count > limit) return res.status(429).json({ error: 'Too many EPUB requests; please try again later' });
-    next();
-  };
 }
 
 async function startServer() {

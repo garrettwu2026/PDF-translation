@@ -46,3 +46,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - Enforced shared upload limits: 50 MB PDF, 12 MB Markdown, and 3,600 PDF pages.
 - Added file-limit unit coverage, increasing the test suite from 7 to 10 tests.
 - Validation: strict TypeScript, all 10 unit tests, and production build passed.
+
+## 2026-08-31 — Maintenance and cost optimization
+
+- Replaced two overlapping document-analysis calls with one JSON-mode request covering terminology, characters, and translation style.
+- Removed up to approximately 30,000 characters of repeated analysis input per new document while preserving all three analysis outputs.
+- Extracted the model catalog and cost math from the main UI into `src/lib/models.ts`.
+- Extracted and lazily loaded Markdown rendering, reducing the initial main bundle from 135.58 KB to 87.39 KB gzip.
+- Extracted the EPUB rate limiter and added expired-client pruning plus reset headers.
+- Added analysis, model-cost, and rate-limit tests, bringing the suite to 17 tests.
+- Validation: strict TypeScript, all 17 unit tests, and production build passed.

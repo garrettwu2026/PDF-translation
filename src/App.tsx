@@ -1,34 +1,13 @@
-import React, { useState, useRef, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import React, { lazy, Suspense, useState, useRef, useEffect } from 'react';
 import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock, Info } from 'lucide-react';
 import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
 import { splitTextIntoChunks } from './lib/text';
 import { assertPdfPageLimit, MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
+import { buildDocumentAnalysisPrompt, parseDocumentAnalysis } from './lib/document-analysis';
+import { calculateTokenCost, DEFAULT_MODEL_ID, estimatePipelineCost, getModelConfig, MODELS } from './lib/models';
 
-type ModelConfig = {
-  id: string;
-  name: string;
-  provider: 'google' | 'openai';
-  inputPrice: number;
-  cachedInputPrice: number;
-  outputPrice: number;
-  badge: string;
-  priceNote?: string;
-};
-
-// Paid-tier standard pricing in USD per 1M tokens, verified against the
-// providers' official pricing pages on 2026-08-31.
-const MODELS: ModelConfig[] = [
-  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', provider: 'google', inputPrice: 0.75, cachedInputPrice: 0.075, outputPrice: 3.75, badge: '最新推薦', priceNote: '優惠價至 2026/12/31' },
-  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'google', inputPrice: 0.30, cachedInputPrice: 0.03, outputPrice: 2.50, badge: '翻譯省錢' },
-  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', provider: 'google', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '最強品質', priceNote: '單次提示 ≤ 200K tokens' },
-  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'openai', inputPrice: 0.20, cachedInputPrice: 0.02, outputPrice: 1.20, badge: '翻譯省錢' },
-  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'openai', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '均衡推薦' },
-  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai', inputPrice: 4.00, cachedInputPrice: 0.40, outputPrice: 20.00, badge: '最強品質', priceNote: '優惠價至少至 2026/11/21' },
-];
-
-const DEFAULT_MODEL_ID = 'gemini-3.7-flash';
+const MarkdownPreview = lazy(() => import('./components/MarkdownPreview'));
+const markdownFallback = <div className="text-sm text-slate-500">正在載入預覽...</div>;
 const LOCAL_STORAGE_KEY_NAME = '__pdf_translator_api_key_v1__';
 const LOCAL_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_v1__';
 const SESSION_STORAGE_KEY_NAME = '__pdf_translator_api_key_session_v1__';
@@ -247,7 +226,7 @@ export default function App() {
     temperature?: number,
     jsonMode?: boolean
   }) => {
-    const selectedModelData = MODELS.find(m => m.id === options.model)!;
+    const selectedModelData = getModelConfig(options.model);
     if (selectedModelData.provider === 'google') {
       const apiKey = manualApiKey;
       if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
@@ -307,7 +286,7 @@ export default function App() {
     promptText: string,
     temperature?: number
   }) {
-    const selectedModelData = MODELS.find(m => m.id === options.model)!;
+    const selectedModelData = getModelConfig(options.model);
     if (selectedModelData.provider === 'google') {
       const apiKey = manualApiKey;
       if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
@@ -419,7 +398,7 @@ export default function App() {
     setError(null);
     const isCurrentRequest = () => tokenWorkerTaskRef.current === requestId;
     try {
-      const selectedModelData = MODELS.find(m => m.id === modelId)!;
+      const selectedModelData = getModelConfig(modelId);
       const fileToUse = currentFile || file;
       if (!fileToUse) throw new Error("File not found");
       const isMd = fileToUse.name.toLowerCase().endsWith('.md');
@@ -532,11 +511,7 @@ export default function App() {
   const handleTranslate = async () => {
     if (!extractedText && (!file || !base64Data)) return;
 
-    const activeModel = MODELS.find((model) => model.id === selectedModel);
-    if (!activeModel) {
-      setError('找不到選取的模型，請重新選擇。');
-      return;
-    }
+    const activeModel = getModelConfig(selectedModel);
 
     const hasProviderKey = activeModel.provider === 'google'
       ? Boolean(manualApiKey && isManualKeyActive)
@@ -778,67 +753,21 @@ export default function App() {
         setStatusMessage('正在提取專業術語、角色關係與分析文本風格...');
         
         try {
-          const glossaryRequest = generateContentWrapper({
+          const analysisResponse = await generateContentWrapper({
             model: selectedModel,
-            promptText: `你是一位世界級的專業翻譯專家與資深編譯專家，精通各種文體的正體中文翻譯。你不僅擅長長篇小說、技術文件與各類科技、科學領域（如：人工智慧、生物工程、物理學、資訊安全等），更深耕於文學小說、社會科學、歷史、經濟、政治等各類文學與非文學著作。請深度閱讀以下文本，並執行以下任務：
-  1. **核心術語提取**：識別文本中的關鍵技術術語、專有名詞。
-  2. **角色關係圖 (Character Map)**：提取所有出現的人物名稱、性別、性格特徵、說話語氣以及他們之間的關係。
-  3. **全域一致性定義**：為每個項目選定一個最精準、符合繁體中文習慣的譯名。
-  
-  請以純文字格式輸出：
-  【術語表】：
-  - [英文]: [中文]
-  
-  【角色圖譜】：
-  - [角色名]: [性別/性格/關係描述]
-  
-  不要輸出任何開頭、結尾 or 解釋性文字。
-  
-  文本內容：
-  ${fullMarkdown.substring(0, 50000)}`
-          }).then(resp => {
-            if (resp.usageMetadata) {
-              setActualInputTokens(prev => prev + (resp.usageMetadata?.promptTokenCount || 0));
-              setActualOutputTokens(prev => prev + (resp.usageMetadata?.candidatesTokenCount || 0));
-            }
-            return resp;
-          }).catch(err => {
-            console.warn("Analysis failed, continuing without it.", err);
-            return { text: '無' };
+            promptText: buildDocumentAnalysisPrompt(fullMarkdown),
+            temperature: 0,
+            jsonMode: true,
           });
+          if (analysisResponse.usageMetadata) {
+            setActualInputTokens(prev => prev + (analysisResponse.usageMetadata?.promptTokenCount || 0));
+            setActualOutputTokens(prev => prev + (analysisResponse.usageMetadata?.candidatesTokenCount || 0));
+          }
 
-          const styleRequest = generateContentWrapper({
-            model: selectedModel,
-            promptText: `請作為世界級的資深編譯專家與學術編輯，精通文學小說、社會科學、歷史、經濟、政治以及各種科技與科學領域（如：AI、生醫、物理、資安等）之文體，為以下文本制定一份「翻譯風格指南」。請分析：
-  1. **文本領域與類型**：(如：硬核科幻、浪漫小說、技術文件、學術論文、政治評論、經濟分析、科學研究、技術白皮書)
-  2. **敘事視角與語氣**：(如：冷峻的第三人稱、感性的第一人稱、正式客觀、學術嚴謹、技術精確)
-  3. **目標受眾與文化背景**：(如：青少年讀者、專業研究員、一般大眾、政策制定者、工程師、科學家)
-  4. **特定風格規範**：(如：對話是否應口語化、是否保留特定外來語、對讀者的稱呼、專業術語的處理)
-  
-  請簡潔地列出風格指南。
-  
-  文本內容：
-  ${fullMarkdown.substring(0, 30000)}`
-          }).then(resp => {
-            if (resp.usageMetadata) {
-              setActualInputTokens(prev => prev + (resp.usageMetadata?.promptTokenCount || 0));
-              setActualOutputTokens(prev => prev + (resp.usageMetadata?.candidatesTokenCount || 0));
-            }
-            return resp;
-          }).catch(err => {
-            console.warn("Style analysis failed, continuing with default style.", err);
-            return { text: '一般/通用' };
-          });
-
-          const [glossaryResponse, styleResponse] = await Promise.all([glossaryRequest, styleRequest]);
-          
-          const analysisText = glossaryResponse.text || '';
-          const glossaryMatch = analysisText.match(/【術語表】：([\s\S]*?)(?=【角色圖譜】：|$)/);
-          const characterMatch = analysisText.match(/【角色圖譜】：([\s\S]*)/);
-          
-          glossaryText = glossaryMatch ? glossaryMatch[1].trim() : '無';
-          detectedCharacters = characterMatch ? characterMatch[1].trim() : '無';
-          detectedStyle = styleResponse.text?.trim() || '一般/通用';
+          const analysis = parseDocumentAnalysis(analysisResponse.text || '');
+          glossaryText = analysis.glossary;
+          detectedCharacters = analysis.characterMap;
+          detectedStyle = analysis.styleGuide;
           
           setTranslationStyle(detectedStyle);
           setGlossary(glossaryText);
@@ -1492,25 +1421,25 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
     }
   };
 
-  const selectedModelData = MODELS.find(m => m.id === selectedModel) ?? MODELS[0];
+  const selectedModelData = getModelConfig(selectedModel);
   
   // The pipeline reads source text multiple times for analysis, translation,
   // proofreading and glossary updates. Keep document tokens separate from the
   // estimated billable pipeline tokens so the UI does not mislabel a multiplier
   // as the source document size.
-  const estimatedPipelineInputTokens = tokenCount ? Math.round(tokenCount * 4) : 0;
-  const estimatedOutputTokens = tokenCount ? Math.round(tokenCount * 2.5) : 0;
-  const estimatedInputCost = estimatedPipelineInputTokens
-    ? (estimatedPipelineInputTokens / 1000000) * selectedModelData.inputPrice
-    : 0;
-  const estimatedOutputCost = estimatedOutputTokens ? (estimatedOutputTokens / 1000000) * selectedModelData.outputPrice : 0;
-  const totalEstimatedCost = estimatedInputCost + estimatedOutputCost;
-  const totalEstimatedCostTWD = totalEstimatedCost * 32.5; // 假設匯率 1 USD = 32.5 TWD
+  const estimatedCost = estimatePipelineCost(selectedModelData, tokenCount ?? 0);
+  const estimatedPipelineInputTokens = estimatedCost.inputTokens;
+  const estimatedOutputTokens = estimatedCost.outputTokens;
+  const estimatedInputCost = estimatedCost.inputUsd;
+  const estimatedOutputCost = estimatedCost.outputUsd;
+  const totalEstimatedCost = estimatedCost.totalUsd;
+  const totalEstimatedCostTWD = estimatedCost.totalTwd;
 
-  const actualInputCost = (actualInputTokens / 1000000) * selectedModelData.inputPrice;
-  const actualOutputCost = (actualOutputTokens / 1000000) * selectedModelData.outputPrice;
-  const totalActualCost = actualInputCost + actualOutputCost;
-  const totalActualCostTWD = totalActualCost * 32.5;
+  const actualCost = calculateTokenCost(selectedModelData, actualInputTokens, actualOutputTokens);
+  const actualInputCost = actualCost.inputUsd;
+  const actualOutputCost = actualCost.outputUsd;
+  const totalActualCost = actualCost.totalUsd;
+  const totalActualCostTWD = actualCost.totalTwd;
 
   return (
     <div className="app-shell min-h-screen bg-slate-950 text-slate-100 font-sans">
@@ -2028,7 +1957,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                       <div className="flex-1 overflow-hidden">
                         <div className="font-semibold text-indigo-200 mb-1">AI 偵測翻譯風格：</div>
                         <div className="prose prose-sm prose-invert max-w-none">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{translationStyle}</ReactMarkdown>
+                          <Suspense fallback={markdownFallback}><MarkdownPreview>{translationStyle}</MarkdownPreview></Suspense>
                         </div>
                       </div>
                     </div>
@@ -2115,7 +2044,9 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   </div>
                 ) : (
                   <div id="translation-result-content" className="prose prose-invert max-w-none prose-headings:font-semibold prose-a:text-blue-400">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</ReactMarkdown>
+                    <Suspense fallback={markdownFallback}>
+                      <MarkdownPreview>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</MarkdownPreview>
+                    </Suspense>
                     {(isTranslating || isExtracting) && (
                       <div className="mt-4 flex items-center text-slate-400 text-sm">
                         <Loader2 className="w-4 h-4 animate-spin mr-2 text-blue-500" />

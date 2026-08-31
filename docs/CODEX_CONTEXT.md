@@ -26,8 +26,12 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/db.ts`: browser IndexedDB translation history
 - `src/lib/text.ts`: safe Markdown chunking and binary conversion utilities
 - `src/lib/file-limits.ts`: shared PDF/Markdown upload and PDF page limits
+- `src/lib/models.ts`: centralized provider model catalog, prices, and cost calculations
+- `src/lib/document-analysis.ts`: one-request glossary, character, and style analysis
+- `src/components/MarkdownPreview.tsx`: lazily loaded Markdown renderer
 - `server.ts`: Express/Vite server and health endpoint
 - `server/epub.ts`: EPUB request validation, sanitization, and generation
+- `server/rate-limit.ts`: bounded fixed-window request limiter with stale-client pruning
 - `tests/`: Node test suite
 
 Uploaded documents, API keys, and translation history stay in the browser. Translation requests go from the browser to the selected AI provider. The server only receives completed content when generating EPUB output.
@@ -72,6 +76,8 @@ npm start
 - Preserve IndexedDB history compatibility.
 - API keys default to `sessionStorage`; persistent `localStorage` is only used when the user explicitly enables “remember on this device”. The stored value is encoded, not encrypted.
 - PDF worker messages are request-scoped and use acknowledgement backpressure. Preserve cancellation and stale-response guards when changing extraction or token counting.
+- Keep model IDs, provider mapping, and displayed prices centralized in `src/lib/models.ts`; do not duplicate the catalog in UI components.
+- Initial document analysis intentionally combines glossary, character map, and style guide into one structured AI request to avoid paying for repeated source input.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
 - Do not weaken EPUB sanitization or server request limits.
 - Avoid exposing raw API errors, secrets, or uploaded content in logs.
