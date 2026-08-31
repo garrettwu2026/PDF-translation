@@ -1,19 +1,10 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import { uint8ArrayToBase64 } from './lib/text';
 
 // Set the worker source for pdfjs-dist
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-
-// Helper to convert Uint8Array to Base64
-function uint8ArrayToBase64(uint8Array: Uint8Array): string {
-  let binary = '';
-  const len = uint8Array.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(uint8Array[i]);
-  }
-  return btoa(binary);
-}
 
 self.onmessage = async (e: MessageEvent) => {
   const { type, payload } = e.data;
@@ -27,8 +18,7 @@ self.onmessage = async (e: MessageEvent) => {
       self.postMessage({ type: 'TOTAL_PAGES', payload: { pageCount } });
 
       if (pageCount <= 1000) {
-        const pdfBytes = await pdfDoc.save();
-        const base64 = uint8ArrayToBase64(pdfBytes);
+        const base64 = uint8ArrayToBase64(new Uint8Array(fileBuffer));
         self.postMessage({ type: 'TOKEN_CHUNK', payload: { base64, isLast: true } });
       } else {
         const CHUNK_SIZE = 500;
@@ -59,15 +49,6 @@ self.onmessage = async (e: MessageEvent) => {
       for (let i = 0; i < totalChunks; i++) {
         const startPage = i * CHUNK_SIZE;
         const endPage = Math.min(startPage + CHUNK_SIZE, pageCount) - 1;
-        const pageIndices = Array.from({length: endPage - startPage + 1}, (_, idx) => startPage + idx);
-        
-        const chunkPdf = await PDFDocument.create();
-        const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
-        copiedPages.forEach(page => chunkPdf.addPage(page));
-        
-        const chunkBytes = await chunkPdf.save();
-        const chunkBase64 = uint8ArrayToBase64(chunkBytes);
-        
         let chunkRawText = '';
         try {
           for (let p = startPage + 1; p <= endPage + 1; p++) {
@@ -77,6 +58,18 @@ self.onmessage = async (e: MessageEvent) => {
           }
         } catch (e) {
           console.warn(`Worker failed to extract raw text for chunk ${i}`, e);
+        }
+
+        // Text-based PDFs do not need an additional PDF copy. Only create a
+        // mini-PDF when OCR is required, which sharply reduces memory use for
+        // long documents.
+        let chunkBase64: string | undefined;
+        if (chunkRawText.replace(/\s+/g, '').length <= 10) {
+          const pageIndices = Array.from({ length: endPage - startPage + 1 }, (_, idx) => startPage + idx);
+          const chunkPdf = await PDFDocument.create();
+          const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
+          copiedPages.forEach((page) => chunkPdf.addPage(page));
+          chunkBase64 = uint8ArrayToBase64(await chunkPdf.save());
         }
         
         self.postMessage({ 
@@ -90,7 +83,10 @@ self.onmessage = async (e: MessageEvent) => {
         });
       }
     }
-  } catch (err: any) {
-    self.postMessage({ type: 'ERROR', payload: { message: err.message } });
+  } catch (err: unknown) {
+    self.postMessage({
+      type: 'ERROR',
+      payload: { message: err instanceof Error ? err.message : 'Unknown PDF worker error' },
+    });
   }
 };

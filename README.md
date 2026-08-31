@@ -1,20 +1,61 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# PDF Translation
 
-# Run and deploy your AI Studio app
+A Traditional Chinese document translation web app for PDF and Markdown files. It supports Google Gemini and OpenAI models, background PDF parsing, resumable local history, and Markdown/PDF/EPUB export.
 
-This contains everything you need to run your app locally.
+## Highlights
 
-View your app in AI Studio: https://ai.studio/apps/a6694c8c-351a-489a-b14a-36c0ea3f7b7d
+- Browser-side PDF text extraction with OCR fallback for scanned pages
+- Translation pipeline with glossary, character, style, and continuity analysis
+- Progress saved in IndexedDB so long translations can be resumed
+- API keys stay in the user's browser and are sent directly to the selected AI provider
+- EPUB input validation, HTML sanitization, request limits, and production security headers
+- No AI key is embedded in the Vite bundle or stored on the application server
 
-## Run Locally
+## Local development
 
-**Prerequisites:**  Node.js
+Requirements: Node.js 22.6 or newer.
 
+```bash
+npm ci
+npm run dev
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Open `http://localhost:3000`, choose **設定 API Key**, and enter the key for the provider you want to use. Environment-based AI keys are intentionally unsupported because this is a bring-your-own-key application.
+
+Useful commands:
+
+```bash
+npm run lint
+npm test
+npm run build
+npm run check
+```
+
+## Render deployment
+
+Create a Node web service with these settings:
+
+- Build command: `npm ci && npm run build`
+- Start command: `npm start`
+- Health check path: `/api/health`
+- Environment variable: `NODE_ENV=production`
+
+Render supplies `PORT` automatically. Do not configure `GEMINI_API_KEY` or `OPENAI_API_KEY` on Render; users enter their own keys in the browser.
+
+## Data and security model
+
+Uploaded files, extracted text, translation history, and API keys remain in the browser. Translation requests go directly from the browser to Google or OpenAI. Only EPUB generation sends the finished Markdown and optional cover image to this server; that endpoint does not persist request content.
+
+Browser storage is convenient, not a password vault. Avoid saving API keys on shared devices, restrict provider keys where supported, and clear them from **設定 API Key** when finished.
+
+## Project structure
+
+```text
+server.ts             Express/Vite entry point
+server/epub.ts        EPUB validation, sanitization, and generation
+src/App.tsx           Translation workflow and interface
+src/pdf.worker.ts     Background PDF parsing and OCR chunk preparation
+src/lib/db.ts         IndexedDB translation history
+src/lib/text.ts       Markdown chunking and binary conversion utilities
+tests/                Automated unit tests
+```

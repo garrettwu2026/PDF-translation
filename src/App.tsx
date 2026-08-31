@@ -1,26 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI, Type } from '@google/genai';
-import OpenAI from 'openai';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-// @ts-ignore
-import html2pdf from 'html2pdf.js/dist/html2pdf.min.js';
 import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Trash2, Image as ImageIcon, Clock, Info } from 'lucide-react';
-import { PDFDocument } from 'pdf-lib';
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
-import { saveHistory, getHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-
-const uint8ArrayToBase64 = (bytes: Uint8Array) => {
-  let binary = '';
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return window.btoa(binary);
-};
+import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
+import { splitTextIntoChunks } from './lib/text';
 
 const MODELS = [
   { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (最強品質)', provider: 'google', inputPrice: 1.25, outputPrice: 5.00 },
@@ -30,53 +13,6 @@ const MODELS = [
   { id: 'gpt-5.4-mini', name: 'GPT 5.4 Mini (OpenAI 推薦)', provider: 'openai', inputPrice: 0.15, outputPrice: 0.60 },
   { id: 'gpt-5.4-pro', name: 'GPT 5.4 Pro (OpenAI 最強)', provider: 'openai', inputPrice: 2.50, outputPrice: 10.00 },
 ];
-
-const splitTextIntoChunks = (text: string, maxChunkSize: number = 3500) => {
-  // 1. First try to split by Markdown headings (H1, H2, H3) to keep sections intact
-  const sections = text.split(/(?=\n#{1,3} )/);
-  const chunks: string[] = [];
-  let currentChunk = '';
-
-  for (const section of sections) {
-    if (currentChunk.length + section.length > maxChunkSize && currentChunk.length > 0) {
-      chunks.push(currentChunk.trim());
-      currentChunk = '';
-    }
-
-    if (section.length > maxChunkSize) {
-      // Section is too long, split by paragraphs
-      const paragraphs = section.split(/\n\n+/);
-      for (const paragraph of paragraphs) {
-        if (currentChunk.length + paragraph.length > maxChunkSize && currentChunk.length > 0) {
-          chunks.push(currentChunk.trim());
-          currentChunk = '';
-        }
-        
-        if (paragraph.length > maxChunkSize) {
-          // Paragraph too long, split by sentences
-          const sentences = paragraph.match(/[^.!?。！？]+[.!?。！？]+["'」』]?\s*/g) || [paragraph];
-          for (const sentence of sentences) {
-            if (currentChunk.length + sentence.length > maxChunkSize && currentChunk.length > 0) {
-              chunks.push(currentChunk.trim());
-              currentChunk = '';
-            }
-            currentChunk += sentence;
-          }
-        } else {
-          currentChunk += (currentChunk.length > 0 ? '\n\n' : '') + paragraph;
-        }
-      }
-    } else {
-      currentChunk += (currentChunk.length > 0 && !currentChunk.endsWith('\n') ? '\n' : '') + section;
-    }
-  }
-  
-  if (currentChunk.trim().length > 0) {
-    chunks.push(currentChunk.trim());
-  }
-  
-  return chunks;
-};
 
 const LOCAL_STORAGE_KEY_NAME = '__pdf_translator_api_key_v1__';
 const LOCAL_STORAGE_OPENAI_KEY_NAME = '__pdf_translator_openai_api_key_v1__';
@@ -135,7 +71,7 @@ export default function App() {
   const [isCopying, setIsCopying] = useState(false);
   const [isDownloadingEpub, setIsDownloadingEpub] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
-  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setIsIframe(window !== window.parent);
@@ -241,6 +177,7 @@ export default function App() {
     
     return () => {
       pdfWorkerRef.current?.terminate();
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     };
   }, []);
 
@@ -264,6 +201,7 @@ export default function App() {
     if (selectedModelData.provider === 'google') {
       const apiKey = manualApiKey;
       if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
+      const { GoogleGenAI } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey });
       const requestOptions: any = {
           model: options.model,
@@ -288,6 +226,7 @@ export default function App() {
     } else {
       const apiKey = manualOpenaiApiKey;
       if (!apiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
+      const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
       const messages: any[] = [];
       if (options.systemInstruction) messages.push({ role: "system", content: options.systemInstruction });
@@ -322,6 +261,7 @@ export default function App() {
     if (selectedModelData.provider === 'google') {
       const apiKey = manualApiKey;
       if (!apiKey || !isManualKeyActive) throw new Error("Google Gemini API Key 尚未設定");
+      const { GoogleGenAI } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey });
       const responseStream = await ai.models.generateContentStream({
           model: options.model,
@@ -340,6 +280,7 @@ export default function App() {
     } else {
       const apiKey = manualOpenaiApiKey;
       if (!apiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
+      const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
       const stream = await openai.chat.completions.create({
           model: options.model,
@@ -391,15 +332,7 @@ export default function App() {
       const base64 = (event.target?.result as string).split(',')[1];
       setBase64Data(base64);
       
-      if (isPdf) {
-        try {
-          const arrayBuffer = await selectedFile.arrayBuffer();
-          const pdfDoc = await PDFDocument.load(arrayBuffer);
-          setTotalPages(pdfDoc.getPageCount());
-        } catch (e) {
-          console.error("Failed to parse PDF pages", e);
-        }
-      } else if (isMd) {
+      if (isMd) {
         setTotalPages(0);
         const text = await selectedFile.text();
         setExtractedText(text);
@@ -418,29 +351,29 @@ export default function App() {
       const selectedModelData = MODELS.find(m => m.id === modelId)!;
       const fileToUse = currentFile || file;
       if (!fileToUse) throw new Error("File not found");
+      const isMd = fileToUse.name.toLowerCase().endsWith('.md');
+
+      const estimateLocally = async () => {
+        const estimatedTokens = isMd
+          ? Math.ceil((await fileToUse.text()).length * 0.5)
+          : Math.ceil(fileToUse.size / 4);
+        setTokenCount(estimatedTokens);
+      };
 
       if (selectedModelData.provider === 'openai') {
-        if (!manualOpenaiApiKey || !isOpenaiKeyActive) throw new Error("OpenAI API Key 尚未設定");
-        let totalTokens = 0;
-        const isMd = fileToUse.name.toLowerCase().endsWith('.md');
-        if (isMd) {
-          const text = await fileToUse.text();
-          totalTokens = Math.ceil(text.length * 0.4);
-          setTokenCount(Math.round(totalTokens * 20));
-        } else {
-          totalTokens = Math.ceil(fileToUse.size / 4);
-          setTokenCount(Math.round(totalTokens * 20));
-        }
-        setIsCalculating(false);
+        await estimateLocally();
         return;
       }
 
       const apiKey = manualApiKey;
-      if (!apiKey || !isManualKeyActive) throw new Error("API Key 尚未設定");
+      if (!apiKey || !isManualKeyActive) {
+        await estimateLocally();
+        return;
+      }
+      const { GoogleGenAI } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey });
       
       let totalTokens = 0;
-      const isMd = fileToUse.name.toLowerCase().endsWith('.md');
 
       if (isMd) {
         const text = await fileToUse.text();
@@ -453,8 +386,8 @@ export default function App() {
             ]
           }
         });
-        totalTokens = response.totalTokens;
-        setTokenCount(Math.round(totalTokens * 20));
+        totalTokens = response.totalTokens ?? 0;
+        setTokenCount(Math.round(totalTokens));
       } else {
         const arrayBuffer = await fileToUse.arrayBuffer();
         
@@ -479,9 +412,9 @@ export default function App() {
                     ]
                   }
                 });
-                totalTokens += response.totalTokens;
+                totalTokens += response.totalTokens ?? 0;
                 if (payload.isLast) {
-                  setTokenCount(Math.round(totalTokens * 20));
+                  setTokenCount(Math.round(totalTokens));
                   pdfWorkerRef.current?.removeEventListener('message', handleMessage);
                   resolve();
                 }
@@ -496,10 +429,10 @@ export default function App() {
           };
 
           pdfWorkerRef.current?.addEventListener('message', handleMessage);
-          pdfWorkerRef.current?.postMessage({ 
+          pdfWorkerRef.current?.postMessage({
             type: 'CALCULATE_TOKENS', 
             payload: { fileBuffer: arrayBuffer } 
-          });
+          }, [arrayBuffer]);
         });
       }
     } catch (err: any) {
@@ -513,6 +446,21 @@ export default function App() {
 
   const handleTranslate = async () => {
     if (!extractedText && (!file || !base64Data)) return;
+
+    const activeModel = MODELS.find((model) => model.id === selectedModel);
+    if (!activeModel) {
+      setError('找不到選取的模型，請重新選擇。');
+      return;
+    }
+
+    const hasProviderKey = activeModel.provider === 'google'
+      ? Boolean(manualApiKey && isManualKeyActive)
+      : Boolean(manualOpenaiApiKey && isOpenaiKeyActive);
+    if (!hasProviderKey) {
+      setError(activeModel.provider === 'google' ? 'Google Gemini API Key 尚未設定' : 'OpenAI API Key 尚未設定');
+      setShowKeyModal(true);
+      return;
+    }
     
     let startingChunk = currentChunk;
     if (currentChunk === totalChunks && totalChunks > 0) {
@@ -537,12 +485,13 @@ export default function App() {
     setActualInputTokens(0);
     setActualOutputTokens(0);
     
+    const fileId = currentFileId || crypto.randomUUID();
+    let latestExtractedText = extractedText;
+    let latestTranslatedText = translatedText;
+    let latestChunk = startingChunk;
+    let latestTotalChunks = totalChunks;
+
     try {
-      const apiKey = manualApiKey;
-      if (!apiKey || !isManualKeyActive) throw new Error("API Key 尚未設定");
-      const ai = new GoogleGenAI({ apiKey });
-      
-      const fileId = currentFileId || Date.now().toString();
       setCurrentFileId(fileId);
       
       const saveCurrentState = async (status: 'translating' | 'completed' | 'error', current: number, total: number, extracted: string, translated: string, currentStyle: string | null, currentGlossary: string) => {
@@ -561,8 +510,12 @@ export default function App() {
           translationStyle: currentStyle || undefined,
           glossaryText: currentGlossary || undefined
         };
-        await saveHistory(record);
-        loadHistory();
+        try {
+          await saveHistory(record);
+          void loadHistory();
+        } catch (historyError) {
+          console.warn('Unable to persist translation progress', historyError);
+        }
       };
 
       let fullMarkdown = '';
@@ -649,7 +602,10 @@ export default function App() {
                 completedExtractions++;
                 setCurrentChunk(completedExtractions);
                 setStatusMessage(`正在提取文字 (已完成 ${completedExtractions}/${totalExtractionChunks} 部分)...`);
-                setExtractedText(results.filter(r => r !== undefined).join('\n\n'));
+                latestChunk = completedExtractions;
+                latestTotalChunks = totalExtractionChunks;
+                latestExtractedText = results.filter(r => r !== undefined).join('\n\n');
+                setExtractedText(latestExtractedText);
 
                 if (totalExtractionChunks > 0 && completedExtractions === totalExtractionChunks) {
                   pdfWorkerRef.current?.removeEventListener('message', handleMessage);
@@ -666,13 +622,14 @@ export default function App() {
           };
 
           pdfWorkerRef.current?.addEventListener('message', handleMessage);
-          pdfWorkerRef.current?.postMessage({ 
+          pdfWorkerRef.current?.postMessage({
             type: 'GET_EXTRACTION_CHUNKS', 
             payload: { fileBuffer: arrayBuffer } 
-          });
+          }, [arrayBuffer]);
         });
 
         fullMarkdown = results.join('\n\n').trim();
+        latestExtractedText = fullMarkdown;
         setExtractedText(fullMarkdown);
       }
 
@@ -766,6 +723,7 @@ export default function App() {
       // 3500 characters is a safe upper bound to ensure the translated output doesn't get truncated and maintains high quality.
       const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 3500) : [fullMarkdown];
       const translationChunksCount = textChunks.length;
+      latestTotalChunks = translationChunksCount;
       setTotalChunks(translationChunksCount);
       
       let fullTranslatedText = translatedText; // Start with what we already have
@@ -779,6 +737,7 @@ export default function App() {
       let dynamicPlotSummary = plotSummary;
       
       for (let i = startChunk; i < translationChunksCount; i++) {
+        latestChunk = i + 1;
         setCurrentChunk(i + 1);
         setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
         
@@ -988,12 +947,13 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         }
         
         fullTranslatedText += currentChunkTranslated + '\n\n';
+        latestTranslatedText = fullTranslatedText;
         setTranslatedText(fullTranslatedText);
         previousTranslatedText = currentChunkTranslated.slice(-1000); // Keep last 1000 chars for context
         previousSourceText = textChunks[i].slice(-1000);
         
         // Save progress to IndexedDB
-        await saveCurrentState('translating', i + 1, translationChunksCount, fullMarkdown, fullTranslatedText, translationStyle, dynamicGlossary);
+        await saveCurrentState('translating', i + 1, translationChunksCount, fullMarkdown, fullTranslatedText, detectedStyle, dynamicGlossary);
         
         // Estimation update
         const now = Date.now();
@@ -1009,7 +969,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         }
       }
       
-      await saveCurrentState('completed', translationChunksCount, translationChunksCount, fullMarkdown, fullTranslatedText, translationStyle, glossary);
+      await saveCurrentState('completed', translationChunksCount, translationChunksCount, fullMarkdown, fullTranslatedText, detectedStyle, dynamicGlossary);
       
       if (fullTranslatedText && autoDownload !== 'none') {
         setPendingDownload(autoDownload);
@@ -1018,16 +978,16 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
     } catch (err: any) {
       console.error(err);
       setError(`翻譯失敗 (Translation failed): ${err.message}`);
-      if (currentFileId) {
+      if (fileId) {
         const record: HistoryRecord = {
-          id: currentFileId,
+          id: fileId,
           title: customTitle || file?.name || 'Untitled',
           author: authorName,
           coverImage: coverImage,
-          extractedText: extractedText,
-          translatedText: translatedText,
-          currentChunk: currentChunk,
-          totalChunks: totalChunks,
+          extractedText: latestExtractedText,
+          translatedText: latestTranslatedText,
+          currentChunk: latestChunk,
+          totalChunks: latestTotalChunks,
           status: 'error',
           timestamp: Date.now(),
           model: selectedModel,
@@ -1040,8 +1000,6 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
     } finally {
       setIsTranslating(false);
       setTranslationStage(null);
-      setCurrentChunk(0);
-      setTotalChunks(0);
       setStatusMessage('');
     }
   };
@@ -1273,6 +1231,11 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
         fullText = await file.text();
       } else {
         const arrayBuffer = await file.arrayBuffer();
+        const [pdfjsLib, workerModule] = await Promise.all([
+          import('pdfjs-dist'),
+          import('pdfjs-dist/build/pdf.worker.mjs?url'),
+        ]);
+        pdfjsLib.GlobalWorkerOptions.workerSrc = workerModule.default;
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         const numPages = pdf.numPages;
         
@@ -1396,10 +1359,15 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 
   const selectedModelData = MODELS.find(m => m.id === selectedModel)!;
   
-  // 翻譯成繁體中文時，由於 Tokenizer 的特性，一個中文字通常會佔用 1~3 個 Token
-  // 加上輸出 Token 單價通常是輸入的 3~4 倍，因此將預估倍率從 1.05 提高到 2.5 以更貼近實際花費
-  const estimatedOutputTokens = tokenCount ? Math.round(tokenCount * 2.5) : 0; 
-  const estimatedInputCost = tokenCount ? (tokenCount / 1000000) * selectedModelData.inputPrice : 0;
+  // The pipeline reads source text multiple times for analysis, translation,
+  // proofreading and glossary updates. Keep document tokens separate from the
+  // estimated billable pipeline tokens so the UI does not mislabel a multiplier
+  // as the source document size.
+  const estimatedPipelineInputTokens = tokenCount ? Math.round(tokenCount * 4) : 0;
+  const estimatedOutputTokens = tokenCount ? Math.round(tokenCount * 2.5) : 0;
+  const estimatedInputCost = estimatedPipelineInputTokens
+    ? (estimatedPipelineInputTokens / 1000000) * selectedModelData.inputPrice
+    : 0;
   const estimatedOutputCost = estimatedOutputTokens ? (estimatedOutputTokens / 1000000) * selectedModelData.outputPrice : 0;
   const totalEstimatedCost = estimatedInputCost + estimatedOutputCost;
   const totalEstimatedCostTWD = totalEstimatedCost * 32.5; // 假設匯率 1 USD = 32.5 TWD
@@ -1479,7 +1447,8 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               <History className="w-4 h-4" />
               歷史紀錄
             </button>
-            {isManualKeyActive && (
+            {((selectedModelData.provider === 'google' && isManualKeyActive) ||
+              (selectedModelData.provider === 'openai' && isOpenaiKeyActive)) && (
               <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner hidden sm:flex">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                 已綁定 API Key
@@ -1691,11 +1660,19 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                         </div>
                         <input
                           type="file"
-                          accept="image/*"
+                          accept="image/jpeg,image/png"
                           className="hidden"
                           onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (file) {
+                              if (!['image/jpeg', 'image/png'].includes(file.type)) {
+                                showToast('封面僅支援 JPG 或 PNG 圖片', 'error');
+                                return;
+                              }
+                              if (file.size > 5 * 1024 * 1024) {
+                                showToast('封面圖片不可超過 5 MB', 'error');
+                                return;
+                              }
                               const reader = new FileReader();
                               reader.onload = (e) => setCoverImage(e.target?.result as string);
                               reader.readAsDataURL(file);
@@ -1737,8 +1714,12 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
                   ) : tokenCount !== null ? (
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">輸入 Token 數:</span>
+                        <span className="text-slate-500">文件 Token 數:</span>
                         <span className="font-medium text-slate-300">{tokenCount.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">預估流程輸入 Token:</span>
+                        <span className="font-medium text-slate-300">~{estimatedPipelineInputTokens.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">預估輸出 Token 數:</span>
@@ -2232,7 +2213,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               </div>
               <h2 className="text-2xl font-semibold mb-2 text-slate-100">API Key 設定</h2>
               <p className="text-slate-400 mb-6 text-sm leading-relaxed">
-                使用此翻譯工具需要設定對應的 API Key。金鑰會安全加密儲存於瀏覽器本地，請放心使用。
+                使用此翻譯工具需要設定對應的 API Key。金鑰只會儲存在此瀏覽器，並直接傳送給所選的 AI 服務；請勿在共用裝置上儲存。
               </p>
 
               <div className="text-left space-y-4">
@@ -2316,7 +2297,7 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
               </div>
               
               <p className="text-xs text-slate-500 mt-6 text-center">
-                提示：若想清空儲存的金鑰，請將輸入框留空並點擊「儲存並套用」。金鑰會以輕度加密的形式僅儲存於您的瀏覽器中。
+                提示：若想清空儲存的金鑰，請將輸入框留空並點擊「儲存並套用」。瀏覽器本機儲存並非密碼保管庫。
               </p>
             </div>
           </div>

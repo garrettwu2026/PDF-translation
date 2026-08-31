@@ -1,99 +1,80 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import epubModule from 'epub-gen-memory';
-const epub = (epubModule as any).default || epubModule;
-import { marked } from 'marked';
+import {
+  contentDisposition,
+  generateEpub,
+  InvalidEpubInputError,
+  parseEpubRequest,
+} from './server/epub.ts';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const isProduction = process.env.NODE_ENV === 'production';
+
+function securityHeaders(_req: express.Request, res: express.Response, next: express.NextFunction) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (isProduction) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+}
+
+function createRateLimiter(limit: number, windowMs: number) {
+  const clients = new Map<string, { count: number; resetAt: number }>();
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const now = Date.now();
+    const key = req.ip || 'unknown';
+    const existing = clients.get(key);
+    const entry = !existing || existing.resetAt <= now
+      ? { count: 0, resetAt: now + windowMs }
+      : existing;
+    entry.count += 1;
+    clients.set(key, entry);
+    res.setHeader('RateLimit-Limit', String(limit));
+    res.setHeader('RateLimit-Remaining', String(Math.max(0, limit - entry.count)));
+    if (entry.count > limit) return res.status(429).json({ error: 'Too many EPUB requests; please try again later' });
+    next();
+  };
+}
 
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-  app.use(express.json({ limit: '50mb' }));
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use(securityHeaders);
+  app.use(express.json({ limit: '20mb', type: 'application/json' }));
 
   // API routes
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok' });
+  app.get('/api/health', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ status: 'ok', uptimeSeconds: Math.floor(process.uptime()) });
   });
 
-  app.post('/api/generate-epub', async (req, res) => {
+  app.post('/api/generate-epub', createRateLimiter(30, 60 * 60 * 1000), async (req, res) => {
     try {
-      const { title, markdown, author, cover } = req.body;
-      if (!markdown) {
-        return res.status(400).json({ error: 'Missing markdown content' });
-      }
-
-      const tokens = marked.lexer(markdown);
-      const chapters: { title: string; raw: string }[] = [];
-      let currentChapter = { title: '前言', raw: '' };
-
-      for (const token of tokens) {
-        if (token.type === 'heading' && (token.depth === 1 || token.depth === 2 || token.depth === 3)) {
-          if (currentChapter.raw.trim()) {
-            chapters.push(currentChapter);
-          }
-          currentChapter = { title: token.text, raw: token.raw };
-        } else {
-          currentChapter.raw += token.raw;
-        }
-      }
-      if (currentChapter.raw.trim()) {
-        chapters.push(currentChapter);
-      }
-
-      const epubChapters = await Promise.all(chapters.map(async (ch) => {
-        let htmlContent = await marked.parse(ch.raw);
-        
-        // Remove all img, picture, and svg tags because epub-gen-memory fails with non-absolute/base64 URLs
-        htmlContent = htmlContent.replace(/<img[^>]*>/g, '');
-        htmlContent = htmlContent.replace(/<picture[^>]*>[\s\S]*?<\/picture>/gi, '');
-        htmlContent = htmlContent.replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, '');
-        
-        return {
-          title: ch.title,
-          content: htmlContent
-        };
-      }));
-
-      if (epubChapters.length === 0) {
-        epubChapters.push({ title: '內容', content: '<p>無內容</p>' });
-      }
-
-      const epubOptions: any = { 
-        title: title || 'Translated Document', 
-        author: author || 'AI Translator',
-        date: new Date().toISOString().split('.')[0] + 'Z',
-        lang: 'zh-TW',
-        tocTitle: '目錄'
-      };
-
-      if (cover) {
-        epubOptions.cover = cover;
-      }
-
-      const epubBuffer = await epub(
-        epubOptions,
-        epubChapters
-      );
+      const input = parseEpubRequest(req.body);
+      const epubBuffer = await generateEpub(input);
 
       res.setHeader('Content-Type', 'application/epub+zip');
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title || 'document')}.epub"`);
+      res.setHeader('Content-Disposition', contentDisposition(input.title));
+      res.setHeader('Cache-Control', 'no-store');
       res.send(epubBuffer);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      if (error instanceof InvalidEpubInputError) {
+        return res.status(400).json({ error: error.message });
+      }
       console.error('EPUB Generation Error:', error);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: 'Unable to generate EPUB' });
     }
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -101,15 +82,41 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*all', (req, res) => {
+    app.use(express.static(distPath, {
+      index: false,
+      maxAge: '1y',
+      immutable: true,
+      setHeaders: (res, filePath) => {
+        if (path.basename(filePath) === 'index.html') res.setHeader('Cache-Control', 'no-cache');
+      },
+    }));
+    app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (error instanceof SyntaxError) return res.status(400).json({ error: 'Invalid JSON body' });
+    if ((error as { type?: string })?.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'Request body is too large' });
+    }
+    console.error('Unhandled request error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+  server.requestTimeout = 120_000;
+  server.headersTimeout = 15_000;
+
+  const shutdown = () => server.close(() => process.exit(0));
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 }
 
-startServer();
+startServer().catch((error) => {
+  console.error('Unable to start server:', error);
+  process.exitCode = 1;
+});
