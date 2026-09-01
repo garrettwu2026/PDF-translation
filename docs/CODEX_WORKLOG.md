@@ -87,3 +87,12 @@ All dates use Asia/Taipei unless noted otherwise.
 - Extracted model selection, catalog notice, and cost summary UI from `App.tsx`, reducing it from 1,850 to 1,744 lines.
 - Added provider-usage and pricing-reminder coverage, increasing the suite from 26 to 32 tests.
 - Validation: strict TypeScript, all 32 unit tests, and production build passed.
+
+## 2026-09-01 — GPT-5.6 temperature compatibility hotfix
+
+- Added a model capability flag for custom-temperature support.
+- Omitted unsupported `temperature` values from GPT-5.6 analysis and streaming translation requests.
+- Preserved the existing low-temperature configuration for Gemini models.
+- Added regression tests for both provider families.
+- Validation: strict TypeScript, all 33 unit tests, and production build passed.
+

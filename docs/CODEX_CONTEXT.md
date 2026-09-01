@@ -94,6 +94,7 @@ npm start
 - The default run budget is USD 5 and the retry ceiling is user-adjustable from 1–6. A budget stop must preserve resumable history.
 - Browser history is automatically retained to the newest 25 records within an approximate 12-million-character capacity.
 - Keep model IDs, provider mapping, and displayed prices centralized in `src/lib/models.ts`; do not duplicate the catalog in UI components.
+- Respect model capability flags in `src/lib/models.ts`. GPT-5.6 currently requires the provider-default temperature, so OpenAI requests must omit custom `temperature` values.
 - Actual cost must use normalized provider usage: cached input is discounted; Gemini thinking tokens are added to billable output; OpenAI completion tokens already include reasoning and must not be added twice.
 - Initial document analysis intentionally combines glossary, character map, and style guide into one structured AI request to avoid paying for repeated source input.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
@@ -116,3 +117,4 @@ The 2026-08-31 redesign changes the previous dark, information-heavy interface i
 - stacked responsive layout on smaller screens
 
 The functional workflow remains unchanged.
+

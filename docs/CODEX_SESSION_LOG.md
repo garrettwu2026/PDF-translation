@@ -153,3 +153,16 @@ Decisions and outcome:
 - Keep the catalog review reminder deterministic and privacy-preserving; it shows official links and becomes a warning on the scheduled review date or before known promotional changes.
 - Extract model selection, catalog status, run limits, and cost-summary presentation into focused components.
 - Validation: strict TypeScript, 32 unit tests, and production build passed.
+
+### GPT-5.6 temperature compatibility hotfix
+
+User report:
+
+> Translation failed because GPT-5.6 rejected `temperature: 0.1` and only accepts its default value.
+
+Decisions and outcome:
+
+- Added an explicit per-model custom-temperature capability to the centralized model catalog.
+- Omitted `temperature` from both regular and streaming GPT-5.6 requests while preserving Gemini's existing sampling settings.
+- Added regression coverage to prevent unsupported OpenAI parameters from being reintroduced.
+

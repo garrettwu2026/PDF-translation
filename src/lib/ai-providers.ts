@@ -1,4 +1,4 @@
-import { getModelConfig } from './models';
+import { getModelConfig, getTemperatureConfig } from './models';
 import {
   getUsageDelta,
   normalizeGoogleUsage,
@@ -59,7 +59,7 @@ export const generateContent = async (
       model: options.model,
       contents: { parts },
       config: {
-        temperature: options.temperature ?? 0.1,
+        ...getTemperatureConfig(model, options.temperature ?? 0.1),
         systemInstruction: options.systemInstruction,
         responseMimeType: options.jsonMode ? 'application/json' : undefined,
         abortSignal: options.signal,
@@ -80,7 +80,7 @@ export const generateContent = async (
   const response = await openai.chat.completions.create({
     model: options.model,
     messages,
-    temperature: options.temperature ?? 0.1,
+    ...getTemperatureConfig(model, options.temperature ?? 0.1),
     response_format: options.jsonMode ? { type: 'json_object' } : undefined,
   }, { signal: options.signal });
   return {
@@ -103,7 +103,7 @@ export async function* generateContentStream(
       contents: { parts: [{ text: options.promptText }] },
       config: {
         systemInstruction: options.systemInstruction,
-        temperature: options.temperature ?? 0.2,
+        ...getTemperatureConfig(model, options.temperature ?? 0.2),
         abortSignal: options.signal,
       },
     });
@@ -125,7 +125,7 @@ export async function* generateContentStream(
       ...(options.systemInstruction ? [{ role: 'system' as const, content: options.systemInstruction }] : []),
       { role: 'user' as const, content: options.promptText },
     ],
-    temperature: options.temperature ?? 0.2,
+    ...getTemperatureConfig(model, options.temperature ?? 0.2),
     stream: true,
     stream_options: { include_usage: true },
   }, { signal: options.signal });
@@ -136,3 +136,4 @@ export async function* generateContentStream(
     };
   }
 }
+

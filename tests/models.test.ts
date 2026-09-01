@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateTokenCost, estimatePipelineCost, getModelCatalogStatus, getModelConfig } from '../src/lib/models.ts';
+import { calculateTokenCost, estimatePipelineCost, getModelCatalogStatus, getModelConfig, getTemperatureConfig } from '../src/lib/models.ts';
 
 test('model lookup falls back to the default model', () => {
   assert.equal(getModelConfig('missing-model').id, 'gemini-3.7-flash');
   assert.equal(getModelConfig('gpt-5.6-luna').provider, 'openai');
+});
+
+test('sampling config omits unsupported GPT-5.6 temperatures', () => {
+  assert.deepEqual(getTemperatureConfig(getModelConfig('gpt-5.6-luna'), 0.1), {});
+  assert.deepEqual(getTemperatureConfig(getModelConfig('gpt-5.6-sol'), 0.2), {});
+  assert.deepEqual(getTemperatureConfig(getModelConfig('gemini-3.7-flash'), 0.1), { temperature: 0.1 });
 });
 
 test('token cost calculation uses per-million-token prices', () => {
@@ -40,3 +46,4 @@ test('catalog status reminds maintainers when routine or promotional review is d
   assert.equal(getModelCatalogStatus('2026-10-16').needsReview, true);
   assert.equal(getModelCatalogStatus('2026-11-05').upcomingPricingReview?.modelName, 'Gemini 3.7 Flash');
 });
+

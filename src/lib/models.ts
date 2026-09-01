@@ -8,6 +8,7 @@ export type ModelConfig = {
   badge: string;
   priceNote?: string;
   pricingReviewDate?: string;
+  supportsCustomTemperature: boolean;
 };
 
 export type TokenUsage = {
@@ -35,12 +36,12 @@ export const MODEL_PRICING_SOURCES = {
 } as const;
 
 export const MODELS: readonly ModelConfig[] = [
-  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', provider: 'google', inputPrice: 0.75, cachedInputPrice: 0.075, outputPrice: 3.75, badge: '最新推薦', priceNote: '優惠價至 2026/12/31', pricingReviewDate: '2026-12-01' },
-  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'google', inputPrice: 0.30, cachedInputPrice: 0.03, outputPrice: 2.50, badge: '翻譯省錢' },
-  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', provider: 'google', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '最強品質', priceNote: '單次提示 ≤ 200K tokens' },
-  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'openai', inputPrice: 0.20, cachedInputPrice: 0.02, outputPrice: 1.20, badge: '翻譯省錢' },
-  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'openai', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '均衡推薦' },
-  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai', inputPrice: 4.00, cachedInputPrice: 0.40, outputPrice: 20.00, badge: '最強品質', priceNote: '優惠價至少至 2026/11/21', pricingReviewDate: '2026-11-01' },
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', provider: 'google', inputPrice: 0.75, cachedInputPrice: 0.075, outputPrice: 3.75, badge: '最新推薦', priceNote: '優惠價至 2026/12/31', pricingReviewDate: '2026-12-01', supportsCustomTemperature: true },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'google', inputPrice: 0.30, cachedInputPrice: 0.03, outputPrice: 2.50, badge: '翻譯省錢', supportsCustomTemperature: true },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', provider: 'google', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '最強品質', priceNote: '單次提示 ≤ 200K tokens', supportsCustomTemperature: true },
+  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'openai', inputPrice: 0.20, cachedInputPrice: 0.02, outputPrice: 1.20, badge: '翻譯省錢', supportsCustomTemperature: false },
+  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'openai', inputPrice: 2.00, cachedInputPrice: 0.20, outputPrice: 12.00, badge: '均衡推薦', supportsCustomTemperature: false },
+  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', provider: 'openai', inputPrice: 4.00, cachedInputPrice: 0.40, outputPrice: 20.00, badge: '最強品質', priceNote: '優惠價至少至 2026/11/21', pricingReviewDate: '2026-11-01', supportsCustomTemperature: false },
 ];
 
 export const DEFAULT_MODEL_ID = 'gemini-3.7-flash';
@@ -50,6 +51,9 @@ export const PIPELINE_OUTPUT_MULTIPLIER = 2.5;
 
 export const getModelConfig = (modelId: string) =>
   MODELS.find((model) => model.id === modelId) ?? MODELS[0];
+
+export const getTemperatureConfig = (model: ModelConfig, temperature: number) =>
+  model.supportsCustomTemperature ? { temperature } : {};
 
 export const calculateTokenCost = (
   model: ModelConfig,
@@ -118,3 +122,4 @@ export const getModelCatalogStatus = (today = new Date().toISOString().slice(0, 
     upcomingPricingReview,
   };
 };
+
