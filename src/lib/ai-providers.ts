@@ -5,6 +5,11 @@ import {
   normalizeOpenAIUsage,
   type UsageMetadata,
 } from './provider-usage';
+import {
+  getGoogleStructuredOutputConfig,
+  getOpenAIResponseFormat,
+  type StructuredOutputSchema,
+} from './structured-output';
 export type { UsageMetadata } from './provider-usage';
 
 export type ContentResult = {
@@ -19,6 +24,7 @@ export type GenerateContentOptions = {
   base64Pdf?: string;
   temperature?: number;
   jsonMode?: boolean;
+  jsonSchema?: StructuredOutputSchema;
   signal?: AbortSignal;
 };
 
@@ -61,7 +67,7 @@ export const generateContent = async (
       config: {
         ...getTemperatureConfig(model, options.temperature ?? 0.1),
         systemInstruction: options.systemInstruction,
-        responseMimeType: options.jsonMode ? 'application/json' : undefined,
+        ...getGoogleStructuredOutputConfig(options.jsonMode, options.jsonSchema),
         abortSignal: options.signal,
       },
     });
@@ -81,7 +87,7 @@ export const generateContent = async (
     model: options.model,
     messages,
     ...getTemperatureConfig(model, options.temperature ?? 0.1),
-    response_format: options.jsonMode ? { type: 'json_object' } : undefined,
+    response_format: getOpenAIResponseFormat(options.jsonMode, options.jsonSchema),
   }, { signal: options.signal });
   return {
     text: response.choices[0].message.content || '',

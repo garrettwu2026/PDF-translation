@@ -1,9 +1,9 @@
 import React, { lazy, Suspense, useState, useRef, useEffect } from 'react';
 import { Upload, FileText, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Image as ImageIcon, Info } from 'lucide-react';
 import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
-import { splitTextIntoChunks } from './lib/text';
+import { splitMarkdownIntoTokenChunks } from './lib/text';
 import { MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
-import { buildDocumentAnalysisPrompt, parseDocumentAnalysis } from './lib/document-analysis';
+import { buildDocumentAnalysisPrompt, DOCUMENT_ANALYSIS_SCHEMA, parseDocumentAnalysis } from './lib/document-analysis';
 import { calculateTokenCost, DEFAULT_MODEL_ID, estimatePipelineCost, getModelConfig, MODELS } from './lib/models';
 import { reportError, reportWarning } from './lib/diagnostics';
 import { generateContent, generateContentStream, type GenerateContentOptions, type GenerateStreamOptions } from './lib/ai-providers';
@@ -26,7 +26,9 @@ import {
   buildExtractionPrompt,
   buildTranslationPrompt,
   buildTranslationSystemInstruction,
+  CORRECTION_SCHEMA,
   extractionSystemInstruction,
+  parseCorrectionResult,
 } from './lib/translation-prompts';
 import AppToast, { type ToastMessage } from './components/AppToast';
 import ApiKeyModal from './components/ApiKeyModal';
@@ -37,6 +39,13 @@ import TranslationCostSummary from './components/TranslationCostSummary';
 import { useTranslationUsage } from './hooks/useTranslationUsage';
 import { downloadBlob, downloadMarkdown, printElementToPdf, requestEpub } from './lib/browser-exports';
 import { extractPdfText } from './lib/pdf-text-extraction';
+import { assessTranslationQuality, formatQualityIssuesForPrompt } from './lib/translation-quality';
+import {
+  createLayeredDocumentMemory,
+  formatLayeredDocumentMemory,
+  mergeKnowledgeLines,
+  updateLayeredDocumentMemory,
+} from './lib/document-memory';
 
 const MarkdownPreview = lazy(() => import('./components/MarkdownPreview'));
 const markdownFallback = <div className="text-sm text-slate-500">正在載入預覽...</div>;
@@ -591,7 +600,7 @@ export default function App() {
               results.length = payload.totalChunks;
             } else if (type === 'EXTRACTION_CHUNK') {
               const { index, base64, rawText, isLast } = payload;
-              
+
               // Process the chunk using Gemini API on the main thread
               try {
                 if (translationCancelledRef.current) throw new Error('PDF 處理已取消');
@@ -694,6 +703,7 @@ export default function App() {
       let glossaryText = glossary;
       let detectedStyle = translationStyle || '一般/通用';
       let detectedCharacters = characterMap;
+      let globalSummary = '';
       
       if (startingChunk === 0) {
         setTranslationStage('analyzing');
@@ -704,7 +714,7 @@ export default function App() {
             model: selectedModel,
             promptText: buildDocumentAnalysisPrompt(fullMarkdown),
             temperature: 0,
-            jsonMode: true,
+            jsonSchema: DOCUMENT_ANALYSIS_SCHEMA,
           });
           if (analysisResponse.usageMetadata) {
             recordUsage(analysisResponse.usageMetadata, selectedModel, translationBudgetUsd);
@@ -714,6 +724,7 @@ export default function App() {
           glossaryText = analysis.glossary;
           detectedCharacters = analysis.characterMap;
           detectedStyle = analysis.styleGuide;
+          globalSummary = analysis.globalSummary;
           
           setTranslationStyle(detectedStyle);
           setGlossary(glossaryText);
@@ -733,9 +744,9 @@ export default function App() {
       // --- STAGE 2: TRANSLATION ---
       setTranslationStage('translating');
       setStatusMessage('正在準備翻譯...');
-      // Gemini 3/3.5 has a huge context window, but output is limited to 8192 tokens per request.
-      // 3500 characters is a safe upper bound to ensure the translated output doesn't get truncated and maintains high quality.
-      const textChunks = splitTranslation ? splitTextIntoChunks(fullMarkdown, 3500) : [fullMarkdown];
+      // Prefer Markdown boundaries and a provider-independent token budget so
+      // headings, tables, and fenced code are not split by raw character count.
+      const textChunks = splitTranslation ? splitMarkdownIntoTokenChunks(fullMarkdown, 1800) : [fullMarkdown];
       const translationChunksCount = textChunks.length;
       latestTotalChunks = translationChunksCount;
       setTotalChunks(translationChunksCount);
@@ -748,7 +759,8 @@ export default function App() {
       let previousSourceText = startChunk > 0 ? textChunks[startChunk - 1].slice(-1000) : '';
       let dynamicGlossary = glossaryText;
       let dynamicCharacterMap = detectedCharacters;
-      let dynamicPlotSummary = plotSummary;
+      let layeredMemory = createLayeredDocumentMemory(globalSummary, startChunk > 0 ? plotSummary : '');
+      let dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
       
       for (let i = startChunk; i < translationChunksCount; i++) {
         throwIfAborted(translationController.signal);
@@ -794,25 +806,7 @@ export default function App() {
               }
             }
 
-            // Basic validation for translation: check if output is suspiciously short
-            const sourceLength = textChunks[i].replace(/\s+/g, '').length;
-            const targetLength = currentChunkTranslated.replace(/\s+/g, '').length;
-            
-            // For English to Chinese, the character count usually decreases.
-            // We only trigger retry if the source is substantial and the target is extremely short.
-            // Changed threshold from 0.05 to 0.02 to avoid false positives on concise translations or texts with lots of whitespace.
-            if (sourceLength > 150 && targetLength < sourceLength * 0.02) {
-              reportWarning('translation_length_validation_failed', {
-                chunk: i + 1,
-                sourceLength,
-                targetLength,
-              });
-              if (retries < 2) {
-                throw new Error("Translated text is suspiciously short. Possible omission.");
-              } else {
-                reportWarning('short_translation_accepted', { chunk: i + 1, retries });
-              }
-            }
+            const draftQuality = assessTranslationQuality(textChunks[i], currentChunkTranslated);
 
             // Step 2: Self-Correction & Context Update
             setStatusMessage(`正在自我校對與更新術語 (第 ${i + 1}/${translationChunksCount} 部分)...`);
@@ -825,9 +819,10 @@ export default function App() {
                 glossary: dynamicGlossary,
                 characterMap: dynamicCharacterMap,
                 customInstructions,
+                deterministicFindings: formatQualityIssuesForPrompt(draftQuality),
               }),
               temperature: 0,
-              jsonMode: true
+              jsonSchema: CORRECTION_SCHEMA,
             });
             throwIfAborted(translationController.signal);
 
@@ -836,7 +831,7 @@ export default function App() {
             }
 
             try {
-              const correctionResult = JSON.parse(correctionResponse.text || '{}');
+              const correctionResult = parseCorrectionResult(correctionResponse.text || '{}');
               
               if (correctionResult.missingContentDetected) {
                 reportWarning('translation_missing_content_detected', { chunk: i + 1, retries });
@@ -852,33 +847,43 @@ export default function App() {
                 // Update UI with corrected translation
                 setTranslatedText(fullTranslatedText + currentChunkTranslated);
               }
+
+              const correctedQuality = assessTranslationQuality(textChunks[i], currentChunkTranslated);
+              if (correctedQuality.blocking) {
+                reportWarning('translation_deterministic_validation_failed', {
+                  chunk: i + 1,
+                  issueCount: correctedQuality.issues.length,
+                });
+                retries++;
+                if (retries < MAX_RETRIES) {
+                  currentChunkTranslated = '';
+                  continue;
+                }
+                throw new Error('Translation failed deterministic completeness checks');
+              }
               
               if (correctionResult.newTerms && correctionResult.newTerms.length > 0) {
-                const newTermsStr = correctionResult.newTerms.join('\n');
-                dynamicGlossary += (dynamicGlossary === '無' ? '' : '\n') + newTermsStr;
+                dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, correctionResult.newTerms);
                 setGlossary(dynamicGlossary);
                 latestGlossary = dynamicGlossary;
               }
 
               if (correctionResult.newCharacters && correctionResult.newCharacters.length > 0) {
-                const newCharsStr = correctionResult.newCharacters.join('\n');
-                dynamicCharacterMap += (dynamicCharacterMap === '無' ? '' : '\n') + newCharsStr;
+                dynamicCharacterMap = mergeKnowledgeLines(dynamicCharacterMap, correctionResult.newCharacters);
                 setCharacterMap(dynamicCharacterMap);
                 latestCharacterMap = dynamicCharacterMap;
               }
 
               if (correctionResult.chunkSummary) {
-                dynamicPlotSummary = dynamicPlotSummary ? `${dynamicPlotSummary}\n- ${correctionResult.chunkSummary}` : `- ${correctionResult.chunkSummary}`;
-                // Keep plot summary concise (last 10 points)
-                const summaryLines = dynamicPlotSummary.split('\n');
-                if (summaryLines.length > 10) {
-                  dynamicPlotSummary = summaryLines.slice(-10).join('\n');
-                }
+                layeredMemory = updateLayeredDocumentMemory(layeredMemory, correctionResult.chunkSummary, textChunks[i]);
+                dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
                 setPlotSummary(dynamicPlotSummary);
                 latestPlotSummary = dynamicPlotSummary;
               }
             } catch (e) {
+              if (e instanceof Error && e.message.includes('deterministic completeness')) throw e;
               reportWarning('correction_response_parse_failed', { chunk: i + 1 });
+              throw new Error('Correction response schema validation failed');
             }
 
             success = true;
@@ -887,14 +892,14 @@ export default function App() {
             const errorMessage = err.message?.toLowerCase() || '';
             const status = err.status;
             
-            if (status === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('rate limit') || errorMessage.includes('suspiciously short')) {
+            const isQualityRetry = errorMessage.includes('completeness checks') || errorMessage.includes('schema validation');
+            if (status === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('rate limit') || isQualityRetry) {
               retries++;
-              if (retries >= MAX_RETRIES) throw new Error(`翻譯失敗：模型輸出內容過短或達到 API 限制。(${err.message})`);
-              
-              const isShortError = errorMessage.includes('suspiciously short');
-              const waitTime = isShortError ? 1 : retries * 5;
-              
-              setStatusMessage(isShortError ? `譯文長度異常，正在重新嘗試 (${retries}/${MAX_RETRIES})...` : `API 限制，等待 ${waitTime} 秒後重試...`);
+              if (retries >= MAX_RETRIES) throw new Error(`翻譯失敗：模型輸出未通過完整性檢查或達到 API 限制。(${err.message})`);
+
+              const waitTime = isQualityRetry ? 1 : retries * 5;
+
+              setStatusMessage(isQualityRetry ? `譯文完整性檢查未通過，正在重新嘗試 (${retries}/${MAX_RETRIES})...` : `API 限制，等待 ${waitTime} 秒後重試...`);
               await abortableDelay(waitTime * 1000, translationController.signal);
               setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
               currentChunkTranslated = '';
@@ -1742,3 +1747,4 @@ export default function App() {
     </div>
   );
 }
+

@@ -2,9 +2,12 @@ node_modules/
 build/
 dist/
 coverage/
+test-results/
+playwright-report/
 .DS_Store
 *.log
 /test-*.epub
 /test.epub
 .env*
 !.env.example
+

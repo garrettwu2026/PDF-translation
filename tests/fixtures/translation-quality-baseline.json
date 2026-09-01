@@ -1,0 +1,21 @@
+[
+  {
+    "name": "preserves headings numbers URLs and code",
+    "source": "# Release 2.1\n\nVisit https://example.com and run `npm test`.[^1]",
+    "translation": "# 2.1 版\n\n請造訪 https://example.com 並執行 `npm test`。[^1]",
+    "expectedCodes": []
+  },
+  {
+    "name": "detects protected content omissions",
+    "source": "## Budget\n\nThe total is $1,250. Visit https://example.com.[^note]",
+    "translation": "總預算請參閱網站。",
+    "expectedCodes": ["missing_heading", "missing_url", "missing_footnote", "missing_number"]
+  },
+  {
+    "name": "detects suspiciously short output",
+    "source": "This paragraph contains enough source material to represent a meaningful translation unit. It repeats important context so a nearly empty response is recognized as an omission rather than accepted as a concise translation.",
+    "translation": "很短。",
+    "expectedCodes": ["suspiciously_short"]
+  }
+]
+

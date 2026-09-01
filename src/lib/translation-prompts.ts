@@ -14,7 +14,34 @@ type CorrectionContext = {
   glossary: string;
   characterMap: string;
   customInstructions: string;
+  deterministicFindings?: string;
 };
+
+export type CorrectionResult = {
+  correctedTranslation: string;
+  newTerms: string[];
+  newCharacters: string[];
+  chunkSummary: string;
+  foundHallucinations: boolean;
+  missingContentDetected: boolean;
+};
+
+export const CORRECTION_SCHEMA = {
+  name: 'translation_correction',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      correctedTranslation: { type: 'string' },
+      newTerms: { type: 'array', items: { type: 'string' } },
+      newCharacters: { type: 'array', items: { type: 'string' } },
+      chunkSummary: { type: 'string' },
+      foundHallucinations: { type: 'boolean' },
+      missingContentDetected: { type: 'boolean' },
+    },
+    required: ['correctedTranslation', 'newTerms', 'newCharacters', 'chunkSummary', 'foundHallucinations', 'missingContentDetected'],
+  },
+} as const;
 
 export const extractionSystemInstruction = (hasNativeText: boolean) => hasNativeText
   ? 'You are a precise text formatting and repair tool. Your ONLY job is to take the provided raw PDF text and format it into clean Markdown. Fix broken line breaks, identify headings, merge split sentences, and preserve ALL original text exactly. Pay special attention to superscript numbers (citations/footnotes) and ensure they are formatted clearly (e.g., [1] or ^1). DO NOT translate, DO NOT summarize, and DO NOT skip any content.'
@@ -78,6 +105,7 @@ export const buildCorrectionPrompt = ({
   glossary,
   characterMap,
   customInstructions,
+  deterministicFindings,
 }: CorrectionContext) => `請對以下翻譯進行嚴格的自我校對，並提取新出現的專有名詞與劇情發展。
 
 【原文】：
@@ -91,6 +119,9 @@ ${glossary}
 
 【現有角色圖譜】：
 ${characterMap}
+
+【程式化完整性檢查】：
+${deterministicFindings || '- 尚未提供程式化檢查結果。'}
 
 【任務 1：自我校對與零漏譯檢查】：
 請檢查初稿是否有：
@@ -111,12 +142,23 @@ ${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完�
 2. **新角色/角色發展**：新出現的角色或現有角色的新資訊（如性別、新關係）。
 3. **劇情摘要**：用 50 字內簡述本段發生的關鍵劇情。
 
-請務必以 JSON 格式回傳，格式如下：
-{
-  "correctedTranslation": "修正後的最終完整譯文。必須嚴格保留原文的 Markdown 格式、標題結構與分段換行，不可合併段落。禁止包含未翻譯英文。純繁中輸出。",
-  "newTerms": ["- [英文]: [中文]"],
-  "newCharacters": ["- [角色名]: [描述]"],
-  "chunkSummary": "本段劇情的極簡摘要",
-  "foundHallucinations": true 或 false,
-  "missingContentDetected": true 或 false
-}`;
+請依 API 提供的 JSON Schema 回傳結果。correctedTranslation 必須是修正後的完整純譯文；陣列沒有新資料時回傳空陣列。`;
+
+export const parseCorrectionResult = (responseText: string): CorrectionResult => {
+  const normalized = responseText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const parsed = JSON.parse(normalized) as Partial<CorrectionResult>;
+  if (
+    typeof parsed.correctedTranslation !== 'string'
+    || !Array.isArray(parsed.newTerms)
+    || !parsed.newTerms.every((value) => typeof value === 'string')
+    || !Array.isArray(parsed.newCharacters)
+    || !parsed.newCharacters.every((value) => typeof value === 'string')
+    || typeof parsed.chunkSummary !== 'string'
+    || typeof parsed.foundHallucinations !== 'boolean'
+    || typeof parsed.missingContentDetected !== 'boolean'
+  ) {
+    throw new Error('Correction response does not match the required schema');
+  }
+  return parsed as CorrectionResult;
+};
+

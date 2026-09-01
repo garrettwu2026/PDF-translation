@@ -5,6 +5,7 @@ import {
   buildExtractionPrompt,
   buildTranslationPrompt,
   buildTranslationSystemInstruction,
+  parseCorrectionResult,
 } from '../src/lib/translation-prompts.ts';
 
 test('translation prompt builders preserve source and context fields', () => {
@@ -31,9 +32,23 @@ test('correction and extraction prompts retain required content', () => {
     characterMap: 'CHARACTER',
     customInstructions: '',
   });
-  for (const value of ['SOURCE', '草稿', 'TERM', 'CHARACTER', 'correctedTranslation']) {
+  for (const value of ['SOURCE', '草稿', 'TERM', 'CHARACTER', 'JSON Schema']) {
     assert.ok(correction.includes(value));
   }
   assert.ok(buildExtractionPrompt('RAW_TEXT', true).includes('RAW_TEXT'));
   assert.ok(!buildExtractionPrompt('', false).includes('RAW_TEXT'));
 });
+
+test('correction parser enforces the structured output contract', () => {
+  const result = parseCorrectionResult(JSON.stringify({
+    correctedTranslation: '修正版',
+    newTerms: [],
+    newCharacters: [],
+    chunkSummary: '摘要',
+    foundHallucinations: false,
+    missingContentDetected: false,
+  }));
+  assert.equal(result.correctedTranslation, '修正版');
+  assert.throws(() => parseCorrectionResult('{"correctedTranslation":"缺少欄位"}'));
+});
+

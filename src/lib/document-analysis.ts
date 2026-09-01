@@ -2,28 +2,53 @@ export type DocumentAnalysis = {
   glossary: string;
   characterMap: string;
   styleGuide: string;
+  globalSummary: string;
 };
 
 const DEFAULT_ANALYSIS: DocumentAnalysis = {
   glossary: '無',
   characterMap: '無',
   styleGuide: '一般/通用',
+  globalSummary: '',
 };
 
-export const buildDocumentAnalysisPrompt = (markdown: string) => `你是一位世界級的專業翻譯專家與資深編譯專家。請深度閱讀文本，一次完成翻譯前分析：
+export const DOCUMENT_ANALYSIS_SCHEMA = {
+  name: 'document_analysis',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      glossary: { type: 'string' },
+      characterMap: { type: 'string' },
+      styleGuide: { type: 'string' },
+      globalSummary: { type: 'string' },
+    },
+    required: ['glossary', 'characterMap', 'styleGuide', 'globalSummary'],
+  },
+} as const;
+
+export function sampleDocumentForAnalysis(markdown: string, maxCharacters = 50_000, windows = 8): string {
+  const normalized = markdown.trim();
+  if (normalized.length <= maxCharacters) return normalized;
+  const windowCount = Math.max(2, Math.min(windows, Math.floor(maxCharacters / 1_000)));
+  const windowSize = Math.floor(maxCharacters / windowCount);
+  const maxStart = normalized.length - windowSize;
+  return Array.from({ length: windowCount }, (_, index) => {
+    const start = Math.round((maxStart * index) / (windowCount - 1));
+    return `[文件取樣 ${index + 1}/${windowCount}]\n${normalized.slice(start, start + windowSize)}`;
+  }).join('\n\n');
+}
+
+export const buildDocumentAnalysisPrompt = (markdown: string) => `請閱讀分布於全文的代表性取樣，一次完成翻譯前分析：
 1. 建立核心術語表，為關鍵技術術語與專有名詞選定一致的繁體中文譯名。
 2. 建立角色圖譜，包含角色名稱、性別、性格、語氣與關係。
 3. 制定精簡的翻譯風格指南，涵蓋文本類型、敘事語氣、目標受眾與特殊規範。
+4. 建立全書摘要，保留跨章節的重要主題、角色關係與發展，控制在 300 字內。
 
-請只回傳下列 JSON，不要加入解釋或 Markdown code fence：
-{
-  "glossary": "- [英文]: [中文]，每筆一行；沒有則填無",
-  "characterMap": "- [角色名]: [性別/性格/關係描述]，每筆一行；沒有則填無",
-  "styleGuide": "精簡但足以指導全文翻譯的風格指南"
-}
+回傳內容必須符合 API 提供的 JSON Schema；沒有術語或角色時對應欄位填「無」。不要猜測取樣中沒有的資訊。
 
-文本內容：
-${markdown.slice(0, 50_000)}`;
+全文分散取樣：
+${sampleDocumentForAnalysis(markdown)}`;
 
 const asUsefulString = (value: unknown, fallback: string) =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
@@ -36,8 +61,10 @@ export const parseDocumentAnalysis = (responseText: string): DocumentAnalysis =>
       glossary: asUsefulString(parsed.glossary, DEFAULT_ANALYSIS.glossary),
       characterMap: asUsefulString(parsed.characterMap, DEFAULT_ANALYSIS.characterMap),
       styleGuide: asUsefulString(parsed.styleGuide, DEFAULT_ANALYSIS.styleGuide),
+      globalSummary: asUsefulString(parsed.globalSummary, DEFAULT_ANALYSIS.globalSummary),
     };
   } catch {
     return DEFAULT_ANALYSIS;
   }
 };
+

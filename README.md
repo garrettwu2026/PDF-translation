@@ -6,6 +6,9 @@ A Traditional Chinese document translation web app for PDF and Markdown files. I
 
 - Browser-side PDF text extraction with OCR fallback for scanned pages
 - Translation pipeline with glossary, character, style, and continuity analysis
+- Token-aware Markdown chunking with layered whole-book, chapter, and recent context
+- Structured model outputs plus deterministic checks for omissions and damaged Markdown
+- Provider-neutral translation-quality regression baseline
 - Live provider-reported cost accounting for cached input and reasoning tokens
 - Model-price verification dates and upcoming review reminders linked to official pricing
 - Progress saved in IndexedDB so long translations can be resumed
@@ -29,6 +32,7 @@ Useful commands:
 ```bash
 npm run lint
 npm test
+npm run test:quality
 npm run build
 npm run check
 ```
@@ -62,5 +66,8 @@ src/lib/models.ts     Model catalog, review schedule, and token pricing
 src/lib/provider-usage.ts Provider usage normalization
 src/lib/db.ts         IndexedDB translation history
 src/lib/text.ts       Markdown chunking and binary conversion utilities
+src/lib/document-memory.ts Layered long-document translation memory
+src/lib/translation-quality.ts Deterministic translation integrity checks
 tests/                Automated unit tests
 ```
+

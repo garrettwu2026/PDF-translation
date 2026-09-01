@@ -166,3 +166,17 @@ Decisions and outcome:
 - Omitted `temperature` from both regular and streaming GPT-5.6 requests while preserving Gemini's existing sampling settings.
 - Added regression coverage to prevent unsupported OpenAI parameters from being reintroduced.
 
+### Translation-quality foundation
+
+User request:
+
+> Implement a translation-quality evaluation baseline, structured outputs, deterministic omission checks, token/Markdown-aware chunking, and layered document memory.
+
+Decisions and outcome:
+
+- Added a sanitized, provider-neutral quality regression dataset and a dedicated quality-test command.
+- Added strict JSON Schema outputs for document analysis and correction across Gemini and OpenAI.
+- Added deterministic pre/post-correction checks for protected content and Markdown structure; blocking failures retry the affected chunk.
+- Replaced raw-character translation chunks with estimated-token chunks that preserve Markdown blocks and fenced code.
+- Distributed the 50,000-character analysis budget across the full document and added global, chapter, recent, and immediate-context memory layers.
+

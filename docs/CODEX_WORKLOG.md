@@ -96,3 +96,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - Added regression tests for both provider families.
 - Validation: strict TypeScript, all 33 unit tests, and production build passed.
 
+## 2026-09-01 — Translation-quality foundation
+
+- Added a provider-neutral translation-quality fixture set, rubric, and `npm run test:quality` release gate.
+- Added deterministic completeness checks for severe truncation, Markdown headings/fences, URLs, link targets, inline code, footnotes, and numbers.
+- Added strict JSON Schema Structured Outputs shared by Gemini and OpenAI document analysis and correction requests.
+- Replaced 3,500-character chunks with Markdown-aware, estimated-token chunks while keeping fenced code blocks intact.
+- Changed initial analysis from the first 50,000 characters to evenly distributed whole-document samples within the same budget.
+- Added layered global, chapter, recent, and immediate-context memory, with stable de-duplication of terminology and character entries.
+- Validation: strict TypeScript, all 47 unit tests, the five-case dedicated quality gate, and production build passed.
+
