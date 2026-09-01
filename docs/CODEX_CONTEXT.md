@@ -125,9 +125,10 @@ npm start
 
 ## Current UI direction
 
-The 2026-08-31 redesign changes the previous dark, information-heavy interface into a bright document workspace:
+The 2026-08-31 redesign, refined on 2026-09-01, changes the previous dark, information-heavy interface into a bright but more colorful document workspace:
 
-- light neutral background with blue and teal accents
+- soft blue/violet/teal/coral ambient gradients instead of a nearly white canvas
+- color-coded cards: violet for models, teal for uploads, warm coral for preferences, and blue/teal for actions
 - compact header and segmented mode switch
 - one grouped model selector instead of six large radio cards
 - clear selected-model price summary

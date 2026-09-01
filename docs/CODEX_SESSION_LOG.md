@@ -193,3 +193,15 @@ Decisions and outcome:
 - Offer automatic, novel, technical, academic, business/legal, and general modes, with automatic classification included in the existing document-analysis request.
 - Add optional chapter-level consistency proofreading at chapter boundaries or every six chunks, guarded by deterministic completeness validation.
 - Move the per-chunk draft, correction, repair, retry, and validation sequence into a dedicated runner and represent workflow progress with an explicit state machine.
+
+### More lively UI color system
+
+User request:
+
+> The current UI is too white and clean; add some color and make it livelier.
+
+Decisions and outcome:
+
+- Preserve the existing simple layout and functionality while increasing color through low-saturation ambient gradients.
+- Color-code workflow cards with violet, teal, warm coral, and blue/teal accents so sections are easier to distinguish.
+- Add a more expressive brand mark, intro panel, mode switch, result toolbar, and preview surface without reducing text contrast.

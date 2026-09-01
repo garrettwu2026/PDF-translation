@@ -115,3 +115,11 @@ All dates use Asia/Taipei unless noted otherwise.
 - Added an explicit extracting/analyzing/translating/correcting/repairing/chapter-review/saving lifecycle state machine.
 - Extracted per-chunk translation orchestration into `src/lib/translation-runner.ts`; `src/App.tsx` is approximately 1,645 lines after adding the new capabilities.
 - Added protected-content, sentence-repair, document-mode, chapter-review, runner, and state-machine coverage, bringing the suite to 56 tests.
+
+## 2026-09-01 — Livelier workspace color refinement
+
+- Replaced the nearly white page canvas with soft blue, violet, teal, and coral ambient gradients.
+- Added distinct low-saturation card colors and accent rails for model selection, upload, preferences, conversion, and primary actions.
+- Refined the brand mark, introductory banner, mode switch, selected-model card, result toolbar, and preview panel.
+- Preserved responsive behavior, print/PDF colors, layout, controls, and workflow behavior.
+- Verified the desktop and mobile presentation in the in-app browser with no console errors.

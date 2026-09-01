@@ -47,7 +47,7 @@
 
 body {
   margin: 0;
-  background: #f6f8fc;
+  background: #f3f5ff;
 }
 
 button,
@@ -60,9 +60,11 @@ textarea {
 .app-shell {
   color: #172033;
   background:
-    radial-gradient(circle at 8% 0%, rgba(85, 116, 236, 0.11), transparent 25rem),
-    radial-gradient(circle at 90% 8%, rgba(38, 177, 157, 0.08), transparent 28rem),
-    #f6f8fc !important;
+    radial-gradient(circle at 5% 2%, rgba(100, 116, 255, 0.2), transparent 27rem),
+    radial-gradient(circle at 96% 7%, rgba(36, 199, 172, 0.17), transparent 29rem),
+    radial-gradient(circle at 86% 72%, rgba(255, 177, 102, 0.13), transparent 25rem),
+    radial-gradient(circle at 12% 88%, rgba(218, 113, 255, 0.11), transparent 25rem),
+    linear-gradient(155deg, #f8f8ff 0%, #f1f7ff 48%, #fff8f2 100%) !important;
 }
 
 .app-shell .bg-slate-950,
@@ -122,16 +124,20 @@ textarea {
 }
 
 .app-header {
-  background: rgba(255, 255, 255, 0.88) !important;
-  border-color: rgba(217, 225, 236, 0.9) !important;
-  box-shadow: 0 1px 0 rgba(23, 32, 51, 0.03);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.91), rgba(245, 247, 255, 0.91), rgba(241, 252, 249, 0.91)) !important;
+  border-color: rgba(191, 204, 236, 0.72) !important;
+  box-shadow: 0 1px 0 rgba(53, 75, 135, 0.05), 0 8px 28px rgba(69, 91, 155, 0.06);
 }
 
 .brand-mark {
-  color: #3568e8;
-  background: linear-gradient(145deg, #edf2ff, #e6edff) !important;
-  border-color: #d4defd !important;
-  box-shadow: 0 8px 22px rgba(53, 104, 232, 0.16);
+  color: #ffffff;
+  background: linear-gradient(145deg, #6675f5, #4c64dc 55%, #28ad9b) !important;
+  border-color: rgba(255, 255, 255, 0.62) !important;
+  box-shadow: 0 9px 24px rgba(76, 100, 220, 0.25);
+}
+
+.brand-mark svg {
+  color: #ffffff !important;
 }
 
 .header-actions button {
@@ -150,24 +156,44 @@ textarea {
   display: flex;
   align-items: end;
   justify-content: space-between;
+  position: relative;
+  padding: 1.15rem 1.35rem;
+  overflow: hidden;
+  border: 1px solid rgba(192, 203, 237, 0.65);
+  border-radius: 1.25rem;
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.86), rgba(240, 244, 255, 0.82) 52%, rgba(236, 253, 248, 0.8));
+  box-shadow: 0 12px 38px rgba(64, 83, 137, 0.07);
+}
+
+.workspace-intro::after {
+  content: "";
+  position: absolute;
+  right: -2.5rem;
+  top: -4.5rem;
+  width: 13rem;
+  height: 13rem;
+  border-radius: 999px;
+  background: linear-gradient(145deg, rgba(104, 119, 246, 0.18), rgba(41, 190, 165, 0.15), rgba(255, 169, 101, 0.13));
+  pointer-events: none;
 }
 
 .eyebrow {
-  color: #3568e8;
+  color: #5b62d9;
   font-size: 0.68rem;
   font-weight: 750;
   letter-spacing: 0.16em;
 }
 
 .mode-switch {
-  background: #e9eef6;
-  border: 1px solid #dfe6f0;
+  background: linear-gradient(135deg, #e9eaff, #e4f5f2);
+  border: 1px solid #d4d9f3;
+  box-shadow: 0 5px 16px rgba(72, 86, 139, 0.08);
 }
 
 .mode-switch button.is-active {
-  color: #244faf !important;
-  background: #ffffff;
-  box-shadow: 0 3px 10px rgba(23, 32, 51, 0.08);
+  color: #4a51bf !important;
+  background: linear-gradient(145deg, #ffffff, #f7f6ff);
+  box-shadow: 0 4px 13px rgba(71, 78, 166, 0.14);
 }
 
 .app-card,
@@ -177,7 +203,52 @@ textarea {
 }
 
 .app-card {
-  transition: box-shadow 180ms ease, transform 180ms ease;
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow 180ms ease, transform 180ms ease, border-color 180ms ease;
+}
+
+.app-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  border-radius: 1rem 0 0 1rem;
+  background: #6574ed;
+}
+
+.app-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 40px rgba(42, 58, 106, 0.1) !important;
+}
+
+.app-shell .model-card {
+  background: linear-gradient(150deg, #ffffff 0%, #f5f3ff 100%) !important;
+  border-color: #dedbfd !important;
+}
+
+.model-card::before {
+  background: linear-gradient(#7269ed, #9d67e9);
+}
+
+.app-shell .upload-card {
+  background: linear-gradient(150deg, #ffffff 0%, #f0fbf8 100%) !important;
+  border-color: #d2eee7 !important;
+}
+
+.upload-card::before {
+  background: linear-gradient(#25b69d, #56cbb4);
+}
+
+.app-shell .preferences-card,
+.app-shell .converter-card {
+  background: linear-gradient(150deg, #ffffff 0%, #fff7ef 100%) !important;
+  border-color: #f2dfcb !important;
+}
+
+.preferences-card::before,
+.converter-card::before {
+  background: linear-gradient(#f3a25d, #ef7f75);
 }
 
 .section-heading {
@@ -201,6 +272,31 @@ textarea {
   font-weight: 750;
 }
 
+.model-card .step-badge {
+  color: #6258d0;
+  background: #eeebff;
+  border-color: #dcd6ff;
+}
+
+.upload-card .step-badge {
+  color: #138a78;
+  background: #e5f8f3;
+  border-color: #c9eee5;
+}
+
+.preferences-card .step-badge,
+.converter-card .step-badge {
+  color: #c36b38;
+  background: #fff0df;
+  border-color: #f7dcc0;
+}
+
+.action-card .step-badge {
+  color: #3c64ce;
+  background: #e8efff;
+  border-color: #cfdbfb;
+}
+
 .model-select,
 .app-shell input[type="text"],
 .app-shell textarea,
@@ -219,8 +315,8 @@ textarea {
 }
 
 .selected-model {
-  background: linear-gradient(145deg, #f8faff, #f4f8ff);
-  border-color: #dfe7fa !important;
+  background: linear-gradient(135deg, #f0efff, #edf7ff 56%, #eaf9f5);
+  border-color: #d8dcf7 !important;
 }
 
 .model-badge {
@@ -251,8 +347,8 @@ textarea {
   font-size: 0.8rem;
 }
 
-.friendly-option {
-  background: #f8fafc !important;
+.app-shell .friendly-option {
+  background: rgba(255, 255, 255, 0.68) !important;
 }
 
 .advanced-settings summary {
@@ -267,8 +363,13 @@ textarea {
   margin-bottom: 1rem;
 }
 
-.action-card {
-  background: linear-gradient(145deg, #ffffff, #f9fbff) !important;
+.app-shell .action-card {
+  background: linear-gradient(145deg, #ffffff, #eef3ff 58%, #eefaf7) !important;
+  border-color: #d3ddf5 !important;
+}
+
+.action-card::before {
+  background: linear-gradient(#4c6ee3, #32b6a1);
 }
 
 .action-card button:not(:disabled) {
@@ -279,14 +380,17 @@ textarea {
   min-width: 0;
 }
 
-.result-panel {
+.app-shell .result-panel {
   position: sticky;
   top: 6.5rem;
   max-height: calc(100vh - 8rem);
+  background: linear-gradient(155deg, #ffffff, #fbfbff 55%, #f3fbf9) !important;
+  border-color: #d8def0 !important;
+  box-shadow: 0 18px 54px rgba(44, 59, 108, 0.11) !important;
 }
 
-.result-toolbar {
-  background: rgba(250, 252, 255, 0.94) !important;
+.app-shell .result-toolbar {
+  background: linear-gradient(90deg, rgba(242, 243, 255, 0.97), rgba(237, 250, 247, 0.96)) !important;
 }
 
 .result-status-dot {

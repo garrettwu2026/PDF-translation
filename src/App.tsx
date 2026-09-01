@@ -1290,7 +1290,7 @@ export default function App() {
               />
             )}
 
-            <div className="app-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+            <div className="app-card upload-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
               <div className="section-heading">
                 <div className="step-badge">
                   {activeTab === 'translate' ? '2' : '1'}
@@ -1450,7 +1450,7 @@ export default function App() {
             </div>
 
             {activeTab === 'converter' && (
-              <div className="app-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+              <div className="app-card converter-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
                 <div className="section-heading">
                   <div className="step-badge">2</div>
                   <div><h2 className="text-lg font-semibold text-slate-200">設定 EPUB</h2><p className="text-xs text-slate-500 mt-0.5">補上書名與資訊</p></div>
@@ -1471,7 +1471,7 @@ export default function App() {
             )}
 
             {activeTab === 'translate' && (
-              <div className="app-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+              <div className="app-card preferences-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
                 <div className="section-heading">
                   <div className="step-badge">3</div>
                   <div><h2 className="text-lg font-semibold text-slate-200">翻譯偏好</h2><p className="text-xs text-slate-500 mt-0.5">有特別需求再填寫即可</p></div>
