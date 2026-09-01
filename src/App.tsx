@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useState, useRef, useEffect } from 'react';
-import { Upload, FileText, DollarSign, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Image as ImageIcon, Clock, Info } from 'lucide-react';
+import { Upload, FileText, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Image as ImageIcon, Info } from 'lucide-react';
 import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
 import { splitTextIntoChunks } from './lib/text';
 import { MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
@@ -32,7 +32,8 @@ import AppToast, { type ToastMessage } from './components/AppToast';
 import ApiKeyModal from './components/ApiKeyModal';
 import { DeleteHistoryDialog, HistoryModal } from './components/HistoryDialogs';
 import InfoModal from './components/InfoModal';
-import TranslationLimits from './components/TranslationLimits';
+import ModelSelectionPanel from './components/ModelSelectionPanel';
+import TranslationCostSummary from './components/TranslationCostSummary';
 import { useTranslationUsage } from './hooks/useTranslationUsage';
 import { downloadBlob, downloadMarkdown, printElementToPdf, requestEpub } from './lib/browser-exports';
 import { extractPdfText } from './lib/pdf-text-extraction';
@@ -50,7 +51,15 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number | null>(null);
-  const { actualInputTokens, actualOutputTokens, resetUsage, recordUsage } = useTranslationUsage();
+  const {
+    inputTokens: actualInputTokens,
+    cachedInputTokens: actualCachedInputTokens,
+    cacheWriteInputTokens: actualCacheWriteInputTokens,
+    outputTokens: actualOutputTokens,
+    reasoningTokens: actualReasoningTokens,
+    resetUsage,
+    recordUsage,
+  } = useTranslationUsage();
   const [translationBudgetUsd, setTranslationBudgetUsd] = useState(DEFAULT_TRANSLATION_BUDGET_USD);
   const [translationRetryLimit, setTranslationRetryLimit] = useState(DEFAULT_TRANSLATION_RETRY_LIMIT);
   const [isCalculating, setIsCalculating] = useState(false);
@@ -1187,18 +1196,15 @@ export default function App() {
   // estimated billable pipeline tokens so the UI does not mislabel a multiplier
   // as the source document size.
   const estimatedCost = estimatePipelineCost(selectedModelData, tokenCount ?? 0);
-  const estimatedPipelineInputTokens = estimatedCost.inputTokens;
-  const estimatedOutputTokens = estimatedCost.outputTokens;
-  const estimatedInputCost = estimatedCost.inputUsd;
-  const estimatedOutputCost = estimatedCost.outputUsd;
   const totalEstimatedCost = estimatedCost.totalUsd;
-  const totalEstimatedCostTWD = estimatedCost.totalTwd;
-
-  const actualCost = calculateTokenCost(selectedModelData, actualInputTokens, actualOutputTokens);
-  const actualInputCost = actualCost.inputUsd;
-  const actualOutputCost = actualCost.outputUsd;
-  const totalActualCost = actualCost.totalUsd;
-  const totalActualCostTWD = actualCost.totalTwd;
+  const actualUsage = {
+    inputTokens: actualInputTokens,
+    cachedInputTokens: actualCachedInputTokens,
+    cacheWriteInputTokens: actualCacheWriteInputTokens,
+    outputTokens: actualOutputTokens,
+    reasoningTokens: actualReasoningTokens,
+  };
+  const actualCost = calculateTokenCost(selectedModelData, actualUsage);
 
   return (
     <div className="app-shell min-h-screen bg-slate-950 text-slate-100 font-sans">
@@ -1299,59 +1305,17 @@ export default function App() {
           <div className="control-rail lg:col-span-5 xl:col-span-4 space-y-5 print:hidden">
             
             {activeTab === 'translate' && (
-              <div className="app-card model-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
-                <div className="section-heading">
-                  <div className="step-badge">1</div>
-                  <div>
-                    <h2 className="text-lg font-semibold text-slate-200">選擇 AI 模型</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">依照品質、速度和預算選擇</p>
-                  </div>
-                </div>
-
-                <label htmlFor="model-select" className="block text-xs font-semibold text-slate-500 mb-2">翻譯模型</label>
-                <select
-                  id="model-select"
-                  value={selectedModel}
-                  onChange={(event) => setSelectedModel(event.target.value)}
-                  className="model-select w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-200 focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  <optgroup label="Google Gemini">
-                    {MODELS.filter(model => model.provider === 'google').map(model => (
-                      <option key={model.id} value={model.id}>{model.name} — {model.badge}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="OpenAI GPT">
-                    {MODELS.filter(model => model.provider === 'openai').map(model => (
-                      <option key={model.id} value={model.id}>{model.name} — {model.badge}</option>
-                    ))}
-                  </optgroup>
-                </select>
-
-                <div className="selected-model mt-4 rounded-xl border border-slate-800 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                        {selectedModelData.provider === 'google' ? 'Google Gemini' : 'OpenAI GPT'}
-                      </p>
-                      <p className="font-semibold text-slate-200 mt-0.5 truncate">{selectedModelData.name}</p>
-                    </div>
-                    <span className="model-badge shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold">{selectedModelData.badge}</span>
-                  </div>
-                  <div className="price-grid grid grid-cols-3 gap-2 mt-4 text-center">
-                    <div><span>輸入</span><strong>${selectedModelData.inputPrice}</strong></div>
-                    <div><span>快取</span><strong>${selectedModelData.cachedInputPrice}</strong></div>
-                    <div><span>輸出</span><strong>${selectedModelData.outputPrice}</strong></div>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-3">每 1M tokens{selectedModelData.priceNote ? `・${selectedModelData.priceNote}` : ''}</p>
-                </div>
-                <TranslationLimits
-                  budgetUsd={translationBudgetUsd}
-                  retryLimit={translationRetryLimit}
-                  estimatedUsd={totalEstimatedCost}
-                  onBudgetChange={setTranslationBudgetUsd}
-                  onRetryLimitChange={setTranslationRetryLimit}
-                />
-              </div>
+              <ModelSelectionPanel
+                selectedModel={selectedModel}
+                selectedModelData={selectedModelData}
+                disabled={isTranslating}
+                budgetUsd={translationBudgetUsd}
+                retryLimit={translationRetryLimit}
+                estimatedUsd={totalEstimatedCost}
+                onModelChange={setSelectedModel}
+                onBudgetChange={setTranslationBudgetUsd}
+                onRetryLimitChange={setTranslationRetryLimit}
+              />
             )}
 
             <div className="app-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
@@ -1502,84 +1466,14 @@ export default function App() {
               </details>
 
               {activeTab === 'translate' && file && (
-                <div className="mt-6 bg-slate-950/50 rounded-xl p-4 border border-slate-800 shadow-inner">
-                  <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-1.5">
-                    <DollarSign className="w-4 h-4 text-emerald-500" />
-                    預估資訊
-                  </h3>
-                  
-                  {isCalculating ? (
-                    <div className="flex items-center justify-center py-4 text-slate-500 text-sm gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                      計算 Token 中...
-                    </div>
-                  ) : tokenCount !== null ? (
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">文件 Token 數:</span>
-                        <span className="font-medium text-slate-300">{tokenCount.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">預估流程輸入 Token:</span>
-                        <span className="font-medium text-slate-300">~{estimatedPipelineInputTokens.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">預估輸出 Token 數:</span>
-                        <span className="font-medium text-slate-300">~{estimatedOutputTokens.toLocaleString()}</span>
-                      </div>
-                      <div className="pt-2 mt-2 border-t border-slate-800 space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">預估輸入成本:</span>
-                          <span className="text-slate-300">${estimatedInputCost.toFixed(4)} USD</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">預估輸出成本:</span>
-                          <span className="text-slate-300">~${estimatedOutputCost.toFixed(4)} USD</span>
-                        </div>
-                      </div>
-                      <div className="pt-1 text-[10px] text-slate-500 italic">
-                        * 費用以每 100 萬個 Token 為單位計算。PDF 的 Token 數包含文字與格式分析。
-                      </div>
-                      <div className="pt-3 mt-3 border-t border-slate-800 flex flex-col gap-1">
-                        <div className="flex justify-between font-medium text-blue-400">
-                          <span>總預估成本 (USD):</span>
-                          <span>~${totalEstimatedCost.toFixed(4)}</span>
-                        </div>
-                        <div className="flex justify-between font-bold text-emerald-400">
-                          <span>總預估成本 (TWD):</span>
-                          <span>~NT$ {totalEstimatedCostTWD.toFixed(2)}</span>
-                        </div>
-                      </div>
-                      
-                      {(actualInputTokens > 0 || actualOutputTokens > 0) && (
-                        <div className="pt-4 mt-4 border-t border-slate-700/50 space-y-2">
-                          <h4 className="text-sm font-semibold text-slate-300 flex items-center gap-1.5 mb-2">
-                            <Clock className="w-4 h-4 text-purple-400" />
-                            實際使用量與成本 (即時更新)
-                          </h4>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">實際輸入 Token:</span>
-                            <span className="font-medium text-slate-300">{actualInputTokens.toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">實際輸出 Token:</span>
-                            <span className="font-medium text-slate-300">{actualOutputTokens.toLocaleString()}</span>
-                          </div>
-                          <div className="pt-2 mt-2 border-t border-slate-800/50 space-y-1">
-                            <div className="flex justify-between text-blue-400">
-                              <span>實際已產生成本 (USD):</span>
-                              <span className="font-medium">${totalActualCost.toFixed(4)}</span>
-                            </div>
-                            <div className="flex justify-between text-emerald-400">
-                              <span>實際已產生成本 (TWD):</span>
-                              <span className="font-bold">NT$ {totalActualCostTWD.toFixed(2)}</span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
+                <TranslationCostSummary
+                  isCalculating={isCalculating}
+                  documentTokens={tokenCount}
+                  estimatedUsage={estimatedCost}
+                  estimatedCost={estimatedCost}
+                  actualUsage={actualUsage}
+                  actualCost={actualCost}
+                />
               )}
             </div>
 

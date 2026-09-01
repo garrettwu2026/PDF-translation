@@ -20,21 +20,46 @@ export class TranslationBudgetExceededError extends Error {
 
 export class TranslationUsageMeter {
   inputTokens = 0;
+  cachedInputTokens = 0;
+  cacheWriteInputTokens = 0;
   outputTokens = 0;
+  reasoningTokens = 0;
 
   reset() {
     this.inputTokens = 0;
+    this.cachedInputTokens = 0;
+    this.cacheWriteInputTokens = 0;
     this.outputTokens = 0;
+    this.reasoningTokens = 0;
   }
 
   add(usage?: UsageMetadata) {
-    this.inputTokens += Math.max(0, usage?.promptTokenCount ?? 0);
-    this.outputTokens += Math.max(0, usage?.candidatesTokenCount ?? 0);
-    return { inputTokens: this.inputTokens, outputTokens: this.outputTokens };
+    const inputTokens = Math.max(0, usage?.promptTokenCount ?? 0);
+    const cachedInputTokens = Math.min(inputTokens, Math.max(0, usage?.cachedPromptTokenCount ?? 0));
+    const cacheWriteInputTokens = Math.min(
+      inputTokens - cachedInputTokens,
+      Math.max(0, usage?.cacheWriteTokenCount ?? 0),
+    );
+    this.inputTokens += inputTokens;
+    this.cachedInputTokens += cachedInputTokens;
+    this.cacheWriteInputTokens += cacheWriteInputTokens;
+    this.outputTokens += Math.max(0, usage?.billedOutputTokenCount ?? usage?.candidatesTokenCount ?? 0);
+    this.reasoningTokens += Math.max(0, usage?.reasoningTokenCount ?? 0);
+    return this.totals();
+  }
+
+  totals() {
+    return {
+      inputTokens: this.inputTokens,
+      cachedInputTokens: this.cachedInputTokens,
+      cacheWriteInputTokens: this.cacheWriteInputTokens,
+      outputTokens: this.outputTokens,
+      reasoningTokens: this.reasoningTokens,
+    };
   }
 
   cost(model: ModelConfig) {
-    return calculateTokenCost(model, this.inputTokens, this.outputTokens);
+    return calculateTokenCost(model, this.totals());
   }
 
   enforce(model: ModelConfig, limitUsd: number) {

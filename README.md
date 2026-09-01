@@ -6,6 +6,8 @@ A Traditional Chinese document translation web app for PDF and Markdown files. I
 
 - Browser-side PDF text extraction with OCR fallback for scanned pages
 - Translation pipeline with glossary, character, style, and continuity analysis
+- Live provider-reported cost accounting for cached input and reasoning tokens
+- Model-price verification dates and upcoming review reminders linked to official pricing
 - Progress saved in IndexedDB so long translations can be resumed
 - API keys stay in the user's browser and are sent directly to the selected AI provider
 - EPUB input validation, HTML sanitization, request limits, and production security headers
@@ -53,8 +55,11 @@ Browser storage is convenient, not a password vault. Avoid saving API keys on sh
 ```text
 server.ts             Express/Vite entry point
 server/epub.ts        EPUB validation, sanitization, and generation
-src/App.tsx           Translation workflow and interface
+src/App.tsx           Translation workflow orchestration and page composition
+src/components/       Model, pricing, cost, dialog, and preview UI
 src/pdf.worker.ts     Background PDF parsing and OCR chunk preparation
+src/lib/models.ts     Model catalog, review schedule, and token pricing
+src/lib/provider-usage.ts Provider usage normalization
 src/lib/db.ts         IndexedDB translation history
 src/lib/text.ts       Markdown chunking and binary conversion utilities
 tests/                Automated unit tests

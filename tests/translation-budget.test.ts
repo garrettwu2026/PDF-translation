@@ -13,7 +13,29 @@ test('usage meter accumulates provider usage and enforces a USD limit', () => {
   assert.throws(() => meter.enforce(getModelConfig('gpt-5.6-luna'), 0.5), TranslationBudgetExceededError);
   assert.equal(meter.enforce(getModelConfig('gpt-5.6-luna'), 1).totalUsd, 0.8);
   meter.reset();
-  assert.deepEqual(meter.add(), { inputTokens: 0, outputTokens: 0 });
+  assert.deepEqual(meter.add(), {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+  });
+});
+
+test('usage meter applies cached input pricing and Gemini reasoning output', () => {
+  const meter = new TranslationUsageMeter();
+  meter.add({
+    promptTokenCount: 1_000_000,
+    cachedPromptTokenCount: 200_000,
+    candidatesTokenCount: 500_000,
+    reasoningTokenCount: 100_000,
+    billedOutputTokenCount: 600_000,
+  });
+  const cost = meter.cost(getModelConfig('gemini-3.7-flash'));
+  assert.equal(cost.cachedInputTokens, 200_000);
+  assert.ok(Math.abs(cost.inputUsd - 0.615) < Number.EPSILON);
+  assert.equal(cost.outputUsd, 2.25);
+  assert.ok(Math.abs(cost.totalUsd - 2.865) < Number.EPSILON);
 });
 
 test('retry limit is clamped to the supported range', () => {

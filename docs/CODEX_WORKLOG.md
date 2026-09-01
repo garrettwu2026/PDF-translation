@@ -77,3 +77,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - Added Playwright E2E coverage for limits, API-key/history dialogs, mode switching, Markdown upload, and preview rendering.
 - Added a dedicated GitHub Actions browser-E2E workflow.
 - Validation: strict TypeScript, all 26 unit tests, production build, E2E test discovery, and local interactive browser smoke test passed.
+
+## 2026-09-01 — Precise provider costs and pricing reminders
+
+- Normalized Gemini and OpenAI usage metadata into cached input, cache-write, billed output, and reasoning token totals.
+- Counted Gemini thinking tokens as billable output while avoiding double-counting OpenAI reasoning tokens already included in completion totals.
+- Applied cached-input discounts to actual run costs and prevented cumulative Gemini stream metadata from being counted repeatedly.
+- Added official pricing links, a 45-day catalog review schedule, and advance reminders for promotional price reviews.
+- Extracted model selection, catalog notice, and cost summary UI from `App.tsx`, reducing it from 1,850 to 1,744 lines.
+- Added provider-usage and pricing-reminder coverage, increasing the suite from 26 to 32 tests.
+- Validation: strict TypeScript, all 32 unit tests, and production build passed.

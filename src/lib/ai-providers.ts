@@ -1,9 +1,11 @@
 import { getModelConfig } from './models';
-
-export type UsageMetadata = {
-  promptTokenCount?: number;
-  candidatesTokenCount?: number;
-};
+import {
+  getUsageDelta,
+  normalizeGoogleUsage,
+  normalizeOpenAIUsage,
+  type UsageMetadata,
+} from './provider-usage';
+export type { UsageMetadata } from './provider-usage';
 
 export type ContentResult = {
   text: string;
@@ -63,7 +65,7 @@ export const generateContent = async (
         abortSignal: options.signal,
       },
     });
-    return { text: response.text || '', usageMetadata: response.usageMetadata };
+    return { text: response.text || '', usageMetadata: normalizeGoogleUsage(response.usageMetadata) };
   }
 
   const apiKey = requireKey(credentials.openaiApiKey, 'OpenAI');
@@ -83,10 +85,7 @@ export const generateContent = async (
   }, { signal: options.signal });
   return {
     text: response.choices[0].message.content || '',
-    usageMetadata: {
-      promptTokenCount: response.usage?.prompt_tokens || 0,
-      candidatesTokenCount: response.usage?.completion_tokens || 0,
-    },
+    usageMetadata: normalizeOpenAIUsage(response.usage),
   };
 };
 
@@ -108,8 +107,11 @@ export async function* generateContentStream(
         abortSignal: options.signal,
       },
     });
+    let previousUsage: UsageMetadata | undefined;
     for await (const chunk of stream) {
-      yield { text: chunk.text || '', usageMetadata: chunk.usageMetadata };
+      const currentUsage = normalizeGoogleUsage(chunk.usageMetadata);
+      yield { text: chunk.text || '', usageMetadata: getUsageDelta(currentUsage, previousUsage) };
+      if (currentUsage) previousUsage = currentUsage;
     }
     return;
   }
@@ -130,12 +132,7 @@ export async function* generateContentStream(
   for await (const chunk of stream) {
     yield {
       text: chunk.choices?.[0]?.delta?.content || '',
-      usageMetadata: chunk.usage
-        ? {
-            promptTokenCount: chunk.usage.prompt_tokens,
-            candidatesTokenCount: chunk.usage.completion_tokens,
-          }
-        : undefined,
+      usageMetadata: normalizeOpenAIUsage(chunk.usage),
     };
   }
 }

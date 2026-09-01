@@ -1,6 +1,6 @@
 # Codex project context
 
-Last updated: 2026-08-31 (Asia/Taipei)
+Last updated: 2026-09-01 (Asia/Taipei)
 
 ## Product
 
@@ -25,6 +25,7 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/pdf.worker.ts`: background PDF parsing and OCR preparation
 - `src/components/`: reusable preview, notification, history, information, and API-key UI
 - `src/lib/ai-providers.ts`: Gemini/OpenAI request adapters
+- `src/lib/provider-usage.ts`: provider-specific cached/reasoning token normalization
 - `src/lib/api-key-storage.ts`: session-first browser key persistence
 - `src/lib/diagnostics.ts`: content-safe development-only diagnostic events
 - `src/lib/translation-prompts.ts`: extraction, translation, and correction prompt builders
@@ -38,6 +39,9 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/browser-exports.ts`: Markdown, EPUB, and safe print export helpers
 - `src/lib/pdf-text-extraction.ts`: converter-mode PDF text extraction
 - `src/components/MarkdownPreview.tsx`: lazily loaded Markdown renderer
+- `src/components/ModelSelectionPanel.tsx`: model selector, price card, and run limits
+- `src/components/ModelCatalogNotice.tsx`: official pricing links and scheduled review warning
+- `src/components/TranslationCostSummary.tsx`: estimated and provider-reported actual cost UI
 - `server.ts`: Express/Vite server and health endpoint
 - `server/epub.ts`: EPUB request validation, sanitization, and generation
 - `server/rate-limit.ts`: bounded fixed-window request limiter with stale-client pruning
@@ -47,7 +51,7 @@ Uploaded documents, API keys, and translation history stay in the browser. Trans
 
 ## Supported AI models and displayed standard prices
 
-Prices are USD per one million tokens and were verified on 2026-08-31.
+Prices are USD per one million tokens and were verified on 2026-09-01. The UI schedules a routine recheck every 45 days and raises an earlier warning before known promotional pricing reviews.
 
 | Provider | Model | Input | Cached input | Output |
 | --- | --- | ---: | ---: | ---: |
@@ -90,6 +94,7 @@ npm start
 - The default run budget is USD 5 and the retry ceiling is user-adjustable from 1–6. A budget stop must preserve resumable history.
 - Browser history is automatically retained to the newest 25 records within an approximate 12-million-character capacity.
 - Keep model IDs, provider mapping, and displayed prices centralized in `src/lib/models.ts`; do not duplicate the catalog in UI components.
+- Actual cost must use normalized provider usage: cached input is discounted; Gemini thinking tokens are added to billable output; OpenAI completion tokens already include reasoning and must not be added twice.
 - Initial document analysis intentionally combines glossary, character map, and style guide into one structured AI request to avoid paying for repeated source input.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
 - Do not weaken EPUB sanitization or server request limits.

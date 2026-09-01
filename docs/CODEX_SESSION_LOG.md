@@ -138,3 +138,18 @@ Decisions and outcome:
 - Extracted usage tracking, budget logic, browser exports, and converter PDF extraction from `App.tsx`.
 - Added Playwright browser integration coverage and a GitHub Actions E2E workflow.
 - Validation: strict TypeScript, 26 unit tests, production build, E2E discovery, and an interactive browser smoke test passed.
+
+### Precise actual costs, model-price reminders, and further App decomposition
+
+User request:
+
+> Continue splitting `App.tsx`, make actual costs more precise, and add price/model update reminders.
+
+Decisions and outcome:
+
+- Normalize provider usage in one module so Gemini thinking tokens and OpenAI reasoning tokens follow their different billing semantics.
+- Discount cached input using the selected model's cached-input rate and expose cached, cache-write, billed-output, and reasoning totals in the live summary.
+- Treat streaming usage metadata as cumulative and add only its delta to avoid duplicate costs.
+- Keep the catalog review reminder deterministic and privacy-preserving; it shows official links and becomes a warning on the scheduled review date or before known promotional changes.
+- Extract model selection, catalog status, run limits, and cost-summary presentation into focused components.
+- Validation: strict TypeScript, 32 unit tests, and production build passed.
