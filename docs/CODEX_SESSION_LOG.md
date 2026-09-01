@@ -180,3 +180,16 @@ Decisions and outcome:
 - Replaced raw-character translation chunks with estimated-token chunks that preserve Markdown blocks and fenced code.
 - Distributed the 50,000-character analysis budget across the full document and added global, chapter, recent, and immediate-context memory layers.
 
+### Protected content, sentence repair, document modes, and workflow state machine
+
+User request:
+
+> Add protected-content placeholders, sentence-level omission localization, document-type modes, chapter-level consistency proofreading, and move the translation flow out of the still-large App component into a state machine.
+
+Decisions and outcome:
+
+- Protect non-translatable code, links, URLs, email, math, and markup with reversible placeholders, and reject changed or missing placeholders.
+- Tag source sentences with stable IDs; ask the structured correction pass for missing IDs and issue a separate targeted repair request only for those sentences.
+- Offer automatic, novel, technical, academic, business/legal, and general modes, with automatic classification included in the existing document-analysis request.
+- Add optional chapter-level consistency proofreading at chapter boundaries or every six chunks, guarded by deterministic completeness validation.
+- Move the per-chunk draft, correction, repair, retry, and validation sequence into a dedicated runner and represent workflow progress with an explicit state machine.

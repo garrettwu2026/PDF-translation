@@ -3,6 +3,7 @@ export type DocumentAnalysis = {
   characterMap: string;
   styleGuide: string;
   globalSummary: string;
+  documentType: 'novel' | 'technical' | 'academic' | 'business_legal' | 'general';
 };
 
 const DEFAULT_ANALYSIS: DocumentAnalysis = {
@@ -10,6 +11,7 @@ const DEFAULT_ANALYSIS: DocumentAnalysis = {
   characterMap: '無',
   styleGuide: '一般/通用',
   globalSummary: '',
+  documentType: 'general',
 };
 
 export const DOCUMENT_ANALYSIS_SCHEMA = {
@@ -22,8 +24,9 @@ export const DOCUMENT_ANALYSIS_SCHEMA = {
       characterMap: { type: 'string' },
       styleGuide: { type: 'string' },
       globalSummary: { type: 'string' },
+      documentType: { type: 'string', enum: ['novel', 'technical', 'academic', 'business_legal', 'general'] },
     },
-    required: ['glossary', 'characterMap', 'styleGuide', 'globalSummary'],
+    required: ['glossary', 'characterMap', 'styleGuide', 'globalSummary', 'documentType'],
   },
 } as const;
 
@@ -44,6 +47,7 @@ export const buildDocumentAnalysisPrompt = (markdown: string) => `請閱讀分�
 2. 建立角色圖譜，包含角色名稱、性別、性格、語氣與關係。
 3. 制定精簡的翻譯風格指南，涵蓋文本類型、敘事語氣、目標受眾與特殊規範。
 4. 建立全書摘要，保留跨章節的重要主題、角色關係與發展，控制在 300 字內。
+5. 將文件分類為 novel、technical、academic、business_legal 或 general。
 
 回傳內容必須符合 API 提供的 JSON Schema；沒有術語或角色時對應欄位填「無」。不要猜測取樣中沒有的資訊。
 
@@ -62,9 +66,11 @@ export const parseDocumentAnalysis = (responseText: string): DocumentAnalysis =>
       characterMap: asUsefulString(parsed.characterMap, DEFAULT_ANALYSIS.characterMap),
       styleGuide: asUsefulString(parsed.styleGuide, DEFAULT_ANALYSIS.styleGuide),
       globalSummary: asUsefulString(parsed.globalSummary, DEFAULT_ANALYSIS.globalSummary),
+      documentType: ['novel', 'technical', 'academic', 'business_legal', 'general'].includes(String(parsed.documentType))
+        ? parsed.documentType as DocumentAnalysis['documentType']
+        : DEFAULT_ANALYSIS.documentType,
     };
   } catch {
     return DEFAULT_ANALYSIS;
   }
 };
-

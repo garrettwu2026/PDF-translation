@@ -47,8 +47,8 @@ test('correction parser enforces the structured output contract', () => {
     chunkSummary: '摘要',
     foundHallucinations: false,
     missingContentDetected: false,
+    missingSentenceIds: [],
   }));
   assert.equal(result.correctedTranslation, '修正版');
   assert.throws(() => parseCorrectionResult('{"correctedTranslation":"缺少欄位"}'));
 });
-

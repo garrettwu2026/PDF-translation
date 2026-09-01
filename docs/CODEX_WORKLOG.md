@@ -106,3 +106,12 @@ All dates use Asia/Taipei unless noted otherwise.
 - Added layered global, chapter, recent, and immediate-context memory, with stable de-duplication of terminology and character entries.
 - Validation: strict TypeScript, all 47 unit tests, the five-case dedicated quality gate, and production build passed.
 
+## 2026-09-01 — Protected content and staged quality pipeline
+
+- Added reversible placeholders for fenced/inline code, Markdown link targets, URLs, email addresses, math, and HTML tags.
+- Added stable sentence IDs, deterministic missing-ID localization, strict structured repair output, and exact reinsertion before final validation.
+- Added automatic and explicit document modes for novels, technical content, academic writing, business/legal documents, and general text.
+- Added optional chapter consistency proofreading at headings, document completion, or a bounded six-chunk interval.
+- Added an explicit extracting/analyzing/translating/correcting/repairing/chapter-review/saving lifecycle state machine.
+- Extracted per-chunk translation orchestration into `src/lib/translation-runner.ts`; `src/App.tsx` is approximately 1,645 lines after adding the new capabilities.
+- Added protected-content, sentence-repair, document-mode, chapter-review, runner, and state-machine coverage, bringing the suite to 56 tests.

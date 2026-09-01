@@ -22,13 +22,8 @@ import {
   readStoredKey,
 } from './lib/api-key-storage';
 import {
-  buildCorrectionPrompt,
   buildExtractionPrompt,
-  buildTranslationPrompt,
-  buildTranslationSystemInstruction,
-  CORRECTION_SCHEMA,
   extractionSystemInstruction,
-  parseCorrectionResult,
 } from './lib/translation-prompts';
 import AppToast, { type ToastMessage } from './components/AppToast';
 import ApiKeyModal from './components/ApiKeyModal';
@@ -39,13 +34,24 @@ import TranslationCostSummary from './components/TranslationCostSummary';
 import { useTranslationUsage } from './hooks/useTranslationUsage';
 import { downloadBlob, downloadMarkdown, printElementToPdf, requestEpub } from './lib/browser-exports';
 import { extractPdfText } from './lib/pdf-text-extraction';
-import { assessTranslationQuality, formatQualityIssuesForPrompt } from './lib/translation-quality';
 import {
   createLayeredDocumentMemory,
   formatLayeredDocumentMemory,
   mergeKnowledgeLines,
   updateLayeredDocumentMemory,
 } from './lib/document-memory';
+import TranslationQualitySettings from './components/TranslationQualitySettings';
+import { getDocumentTypeInstruction, normalizeDocumentType, resolveDocumentType, type DocumentTypeId } from './lib/document-types';
+import { useTranslationMachine } from './hooks/useTranslationMachine';
+import { translateChunkWithQuality } from './lib/translation-runner';
+import {
+  buildChapterProofreadingPrompt,
+  CHAPTER_PROOFREADING_SCHEMA,
+  parseChapterProofreadingResult,
+  shouldProofreadChapter,
+} from './lib/chapter-proofreading';
+import { protectContent, restoreProtectedContent } from './lib/protected-content';
+import { assessTranslationQuality } from './lib/translation-quality';
 
 const MarkdownPreview = lazy(() => import('./components/MarkdownPreview'));
 const markdownFallback = <div className="text-sm text-slate-500">正在載入預覽...</div>;
@@ -72,8 +78,9 @@ export default function App() {
   const [translationBudgetUsd, setTranslationBudgetUsd] = useState(DEFAULT_TRANSLATION_BUDGET_USD);
   const [translationRetryLimit, setTranslationRetryLimit] = useState(DEFAULT_TRANSLATION_RETRY_LIMIT);
   const [isCalculating, setIsCalculating] = useState(false);
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [translationStage, setTranslationStage] = useState<'extracting' | 'analyzing' | 'translating' | null>(null);
+  const translationMachine = useTranslationMachine();
+  const isTranslating = translationMachine.isActive;
+  const translationStage = translationMachine.state.stage;
   const [glossary, setGlossary] = useState<string>('');
   const [currentChunk, setCurrentChunk] = useState(0);
   const [totalChunks, setTotalChunks] = useState(0);
@@ -82,7 +89,10 @@ export default function App() {
   const [translationStyle, setTranslationStyle] = useState<string | null>(null);
   const [characterMap, setCharacterMap] = useState<string>('');
   const [plotSummary, setPlotSummary] = useState<string>('');
-  const [statusMessage, setStatusMessage] = useState('');
+  const statusMessage = translationMachine.state.statusMessage;
+  const setStatusMessage = translationMachine.setStatus;
+  const [documentType, setDocumentType] = useState<DocumentTypeId>('auto');
+  const [chapterProofreading, setChapterProofreading] = useState(true);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [autoDownload, setAutoDownload] = useState<'none' | 'epub' | 'pdf' | 'md'>('md');
   const [pendingDownload, setPendingDownload] = useState<'epub' | 'pdf' | 'md' | null>(null);
@@ -133,6 +143,8 @@ export default function App() {
     setGlossary(record.glossaryText || '無');
     setCharacterMap(record.characterMap || '');
     setPlotSummary(record.plotSummary || '');
+    setDocumentType(normalizeDocumentType(record.documentType));
+    setChapterProofreading(record.chapterProofreading !== false);
     
     setFile(null);
     setBase64Data(null);
@@ -371,7 +383,7 @@ export default function App() {
       }
       const { GoogleGenAI } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey });
-      
+
       let totalTokens = 0;
 
       if (isMd) {
@@ -496,8 +508,7 @@ export default function App() {
     const translationController = new AbortController();
     translationAbortControllerRef.current = translationController;
     translationCancelledRef.current = false;
-    setIsTranslating(true);
-    setTranslationStage(extractedText && startingChunk > 0 ? 'translating' : 'extracting');
+    translationMachine.start(extractedText && startingChunk > 0 ? 'translating' : 'extracting');
     if (startingChunk === 0) {
       setTranslatedText('');
       setTranslationStyle(null);
@@ -552,6 +563,8 @@ export default function App() {
           glossaryText: currentGlossary || undefined,
           characterMap: currentCharacters || undefined,
           plotSummary: currentPlotSummary || undefined,
+          documentType,
+          chapterProofreading,
         };
         try {
           await saveHistory(record);
@@ -704,9 +717,10 @@ export default function App() {
       let detectedStyle = translationStyle || '一般/通用';
       let detectedCharacters = characterMap;
       let globalSummary = '';
+      let detectedDocumentType: 'novel' | 'technical' | 'academic' | 'business_legal' | 'general' = 'general';
       
       if (startingChunk === 0) {
-        setTranslationStage('analyzing');
+        translationMachine.transition('analyzing');
         setStatusMessage('正在提取專業術語、角色關係與分析文本風格...');
         
         try {
@@ -725,6 +739,7 @@ export default function App() {
           detectedCharacters = analysis.characterMap;
           detectedStyle = analysis.styleGuide;
           globalSummary = analysis.globalSummary;
+          detectedDocumentType = analysis.documentType;
           
           setTranslationStyle(detectedStyle);
           setGlossary(glossaryText);
@@ -742,7 +757,7 @@ export default function App() {
       }
       
       // --- STAGE 2: TRANSLATION ---
-      setTranslationStage('translating');
+      translationMachine.transition('translating');
       setStatusMessage('正在準備翻譯...');
       // Prefer Markdown boundaries and a provider-independent token budget so
       // headings, tables, and fenced code are not split by raw character count.
@@ -761,19 +776,23 @@ export default function App() {
       let dynamicCharacterMap = detectedCharacters;
       let layeredMemory = createLayeredDocumentMemory(globalSummary, startChunk > 0 ? plotSummary : '');
       let dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
-      
+      const effectiveDocumentType = resolveDocumentType(documentType, detectedDocumentType);
+      const documentTypeInstruction = getDocumentTypeInstruction(effectiveDocumentType);
+      let chapterSourceChunks: string[] = [];
+      let chapterTranslatedChunks: string[] = [];
+      let chapterStartOffset = fullTranslatedText.length;
+
       for (let i = startChunk; i < translationChunksCount; i++) {
         throwIfAborted(translationController.signal);
         latestChunk = i + 1;
         setCurrentChunk(i + 1);
         setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
-        
-        let success = false;
-        let retries = 0;
-        const MAX_RETRIES = translationRetryLimit;
-        let currentChunkTranslated = '';
-
-        const systemInstruction = buildTranslationSystemInstruction({
+        const result = await translateChunkWithQuality({
+          sourceText: textChunks[i],
+          model: selectedModel,
+          chunkNumber: i + 1,
+          totalChunks: translationChunksCount,
+          retryLimit: translationRetryLimit,
           style: detectedStyle,
           glossary: dynamicGlossary,
           characterMap: dynamicCharacterMap,
@@ -781,135 +800,79 @@ export default function App() {
           previousSourceText,
           previousTranslatedText,
           customInstructions,
+          documentTypeInstruction,
+          signal: translationController.signal,
+          generate: generateContentWrapper,
+          generateStream: generateContentStreamWrapper,
+          onUsage: (usage) => recordUsage(usage, selectedModel, translationBudgetUsd),
+          onPreview: (preview) => setTranslatedText(fullTranslatedText + preview),
+          onStage: (stage, message) => translationMachine.transition(stage, message),
+          onWarning: reportWarning,
         });
-        const promptText = buildTranslationPrompt(textChunks[i]);
+        let currentChunkTranslated = result.translatedText;
 
-        while (!success && retries < MAX_RETRIES) {
+        if (result.newTerms.length > 0) {
+          dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, result.newTerms);
+          setGlossary(dynamicGlossary);
+          latestGlossary = dynamicGlossary;
+        }
+        if (result.newCharacters.length > 0) {
+          dynamicCharacterMap = mergeKnowledgeLines(dynamicCharacterMap, result.newCharacters);
+          setCharacterMap(dynamicCharacterMap);
+          latestCharacterMap = dynamicCharacterMap;
+        }
+        if (result.chunkSummary) {
+          layeredMemory = updateLayeredDocumentMemory(layeredMemory, result.chunkSummary, textChunks[i]);
+          dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
+          setPlotSummary(dynamicPlotSummary);
+          latestPlotSummary = dynamicPlotSummary;
+        }
+
+        fullTranslatedText += currentChunkTranslated + '\n\n';
+        chapterSourceChunks.push(textChunks[i]);
+        chapterTranslatedChunks.push(currentChunkTranslated);
+
+        if (chapterProofreading && shouldProofreadChapter(textChunks, i, chapterSourceChunks.length)) {
+          translationMachine.transition('chapter_review', `正在進行章節一致性校稿 (至第 ${i + 1}/${translationChunksCount} 部分)...`);
+          const sourceChapter = chapterSourceChunks.join('\n\n');
+          const translatedChapter = chapterTranslatedChunks.join('\n\n');
+          const protectedChapter = protectContent(translatedChapter);
           try {
-            throwIfAborted(translationController.signal);
-            // Step 1: Draft Translation (Streaming)
-            setStatusMessage(`正在翻譯初稿 (第 ${i + 1}/${translationChunksCount} 部分)...`);
-            const responseStream = generateContentStreamWrapper({
+            const reviewResponse = await generateContentWrapper({
               model: selectedModel,
-              systemInstruction,
-              promptText,
-              temperature: 0.2
-            });
-            
-            for await (const chunk of responseStream) {
-              throwIfAborted(translationController.signal);
-              const text = chunk.text || '';
-              currentChunkTranslated += text;
-              setTranslatedText(fullTranslatedText + currentChunkTranslated);
-              if (chunk.usageMetadata) {
-                recordUsage(chunk.usageMetadata, selectedModel, translationBudgetUsd);
-              }
-            }
-
-            const draftQuality = assessTranslationQuality(textChunks[i], currentChunkTranslated);
-
-            // Step 2: Self-Correction & Context Update
-            setStatusMessage(`正在自我校對與更新術語 (第 ${i + 1}/${translationChunksCount} 部分)...`);
-            
-            const correctionResponse = await generateContentWrapper({
-              model: selectedModel,
-              promptText: buildCorrectionPrompt({
-                sourceText: textChunks[i],
-                draftTranslation: currentChunkTranslated,
+              promptText: buildChapterProofreadingPrompt({
+                sourceChapter,
+                translatedChapter: protectedChapter.text,
+                documentType: effectiveDocumentType,
+                style: detectedStyle,
                 glossary: dynamicGlossary,
                 characterMap: dynamicCharacterMap,
-                customInstructions,
-                deterministicFindings: formatQualityIssuesForPrompt(draftQuality),
               }),
               temperature: 0,
-              jsonSchema: CORRECTION_SCHEMA,
+              jsonSchema: CHAPTER_PROOFREADING_SCHEMA,
             });
-            throwIfAborted(translationController.signal);
-
-            if (correctionResponse.usageMetadata) {
-              recordUsage(correctionResponse.usageMetadata, selectedModel, translationBudgetUsd);
-            }
-
-            try {
-              const correctionResult = parseCorrectionResult(correctionResponse.text || '{}');
-              
-              if (correctionResult.missingContentDetected) {
-                reportWarning('translation_missing_content_detected', { chunk: i + 1, retries });
-                retries++;
-                if (retries < MAX_RETRIES) {
-                  currentChunkTranslated = '';
-                  continue; // Retry this chunk
-                }
-              }
-
-              if (correctionResult.correctedTranslation) {
-                currentChunkTranslated = correctionResult.correctedTranslation;
-                // Update UI with corrected translation
-                setTranslatedText(fullTranslatedText + currentChunkTranslated);
-              }
-
-              const correctedQuality = assessTranslationQuality(textChunks[i], currentChunkTranslated);
-              if (correctedQuality.blocking) {
-                reportWarning('translation_deterministic_validation_failed', {
-                  chunk: i + 1,
-                  issueCount: correctedQuality.issues.length,
-                });
-                retries++;
-                if (retries < MAX_RETRIES) {
-                  currentChunkTranslated = '';
-                  continue;
-                }
-                throw new Error('Translation failed deterministic completeness checks');
-              }
-              
-              if (correctionResult.newTerms && correctionResult.newTerms.length > 0) {
-                dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, correctionResult.newTerms);
-                setGlossary(dynamicGlossary);
-                latestGlossary = dynamicGlossary;
-              }
-
-              if (correctionResult.newCharacters && correctionResult.newCharacters.length > 0) {
-                dynamicCharacterMap = mergeKnowledgeLines(dynamicCharacterMap, correctionResult.newCharacters);
-                setCharacterMap(dynamicCharacterMap);
-                latestCharacterMap = dynamicCharacterMap;
-              }
-
-              if (correctionResult.chunkSummary) {
-                layeredMemory = updateLayeredDocumentMemory(layeredMemory, correctionResult.chunkSummary, textChunks[i]);
-                dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
-                setPlotSummary(dynamicPlotSummary);
-                latestPlotSummary = dynamicPlotSummary;
-              }
-            } catch (e) {
-              if (e instanceof Error && e.message.includes('deterministic completeness')) throw e;
-              reportWarning('correction_response_parse_failed', { chunk: i + 1 });
-              throw new Error('Correction response schema validation failed');
-            }
-
-            success = true;
-          } catch (err: any) {
-            if (err instanceof TranslationBudgetExceededError || isAbortError(err)) throw err;
-            const errorMessage = err.message?.toLowerCase() || '';
-            const status = err.status;
-            
-            const isQualityRetry = errorMessage.includes('completeness checks') || errorMessage.includes('schema validation');
-            if (status === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('rate limit') || isQualityRetry) {
-              retries++;
-              if (retries >= MAX_RETRIES) throw new Error(`翻譯失敗：模型輸出未通過完整性檢查或達到 API 限制。(${err.message})`);
-
-              const waitTime = isQualityRetry ? 1 : retries * 5;
-
-              setStatusMessage(isQualityRetry ? `譯文完整性檢查未通過，正在重新嘗試 (${retries}/${MAX_RETRIES})...` : `API 限制，等待 ${waitTime} 秒後重試...`);
-              await abortableDelay(waitTime * 1000, translationController.signal);
-              setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
-              currentChunkTranslated = '';
-            } else {
-              throw err;
-            }
+            if (reviewResponse.usageMetadata) recordUsage(reviewResponse.usageMetadata, selectedModel, translationBudgetUsd);
+            const review = parseChapterProofreadingResult(reviewResponse.text || '{}');
+            const restored = restoreProtectedContent(review.correctedChapter, protectedChapter.entries);
+            const reviewQuality = assessTranslationQuality(sourceChapter, restored.text);
+            if (restored.missing.length || restored.unknown.length || reviewQuality.blocking) throw new Error('Chapter review failed completeness checks');
+            fullTranslatedText = `${fullTranslatedText.slice(0, chapterStartOffset)}${restored.text}\n\n`;
+            currentChunkTranslated = restored.text.slice(-Math.max(1000, currentChunkTranslated.length));
+            dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, review.newTerms);
+            dynamicCharacterMap = mergeKnowledgeLines(dynamicCharacterMap, review.newCharacters);
+            setGlossary(dynamicGlossary);
+            setCharacterMap(dynamicCharacterMap);
+            latestGlossary = dynamicGlossary;
+            latestCharacterMap = dynamicCharacterMap;
+          } catch (reviewError) {
+            if (reviewError instanceof TranslationBudgetExceededError || isAbortError(reviewError)) throw reviewError;
+            reportWarning('chapter_proofreading_failed', { chunk: i + 1 });
           }
+          chapterSourceChunks = [];
+          chapterTranslatedChunks = [];
+          chapterStartOffset = fullTranslatedText.length;
         }
-        
-        fullTranslatedText += currentChunkTranslated + '\n\n';
+
         latestTranslatedText = fullTranslatedText;
         setTranslatedText(fullTranslatedText);
         previousTranslatedText = currentChunkTranslated.slice(-1000); // Keep last 1000 chars for context
@@ -942,6 +905,7 @@ export default function App() {
         }
       }
       
+      translationMachine.transition('saving', '正在儲存完成的翻譯...');
       await saveCurrentState(
         'completed',
         translationChunksCount,
@@ -957,16 +921,20 @@ export default function App() {
       if (fullTranslatedText && autoDownload !== 'none') {
         setPendingDownload(autoDownload);
       }
+      translationMachine.transition('completed', '');
       
     } catch (err: any) {
       const wasCancelled = translationCancelledRef.current || isAbortError(err);
       const budgetExceeded = err instanceof TranslationBudgetExceededError;
       if (wasCancelled) {
+        translationMachine.transition('paused', '');
         showToast('翻譯已停止，完成的進度可以從歷史紀錄繼續。', 'success');
       } else if (budgetExceeded) {
+        translationMachine.transition('paused', '');
         setError(`${err.message}。已安全停止並保留進度，調高上限後即可繼續。`);
         showToast('已達費用上限，翻譯進度已保留。', 'error');
       } else {
+        translationMachine.fail(err.message || '翻譯失敗');
         reportError('translation_failed');
         setError(`翻譯失敗 (Translation failed): ${err.message}`);
       }
@@ -987,6 +955,8 @@ export default function App() {
           glossaryText: latestGlossary || undefined,
           characterMap: latestCharacterMap || undefined,
           plotSummary: latestPlotSummary || undefined,
+          documentType,
+          chapterProofreading,
         };
         try {
           await saveHistory(record);
@@ -1000,9 +970,6 @@ export default function App() {
         translationAbortControllerRef.current = null;
       }
       translationCancelledRef.current = false;
-      setIsTranslating(false);
-      setTranslationStage(null);
-      setStatusMessage('');
     }
   };
 
@@ -1510,6 +1477,13 @@ export default function App() {
                   <div><h2 className="text-lg font-semibold text-slate-200">翻譯偏好</h2><p className="text-xs text-slate-500 mt-0.5">有特別需求再填寫即可</p></div>
                 </div>
                 <div className="space-y-4">
+                  <TranslationQualitySettings
+                    documentType={documentType}
+                    chapterProofreading={chapterProofreading}
+                    disabled={isTranslating}
+                    onDocumentTypeChange={setDocumentType}
+                    onChapterProofreadingChange={setChapterProofreading}
+                  />
                   <div>
                     <label className="block text-sm font-medium text-slate-400 mb-1">自訂翻譯指示 (選填)</label>
                     <textarea 
@@ -1747,4 +1721,3 @@ export default function App() {
     </div>
   );
 }
-

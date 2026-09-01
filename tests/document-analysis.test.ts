@@ -15,12 +15,14 @@ test('analysis parser accepts JSON fences and normalizes missing values', () => 
     characterMap: '無',
     styleGuide: '正式',
     globalSummary: '摘要',
+    documentType: 'general',
   });
   assert.deepEqual(parseDocumentAnalysis('invalid'), {
     glossary: '無',
     characterMap: '無',
     styleGuide: '一般/通用',
     globalSummary: '',
+    documentType: 'general',
   });
 });
 
@@ -31,4 +33,3 @@ test('analysis sampling covers the beginning, middle, and end of long documents'
   assert.match(sample, /099:/);
   assert.match(sample, /文件取樣 2\/3/);
 });
-

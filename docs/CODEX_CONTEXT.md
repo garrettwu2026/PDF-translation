@@ -20,7 +20,7 @@ The product direction is **professional, friendly, and simple**. The interface s
 
 ## Architecture
 
-- `src/App.tsx`: translation workflow orchestration and primary page layout
+- `src/App.tsx`: primary page layout and high-level workflow coordination
 - `src/index.css`: Tailwind import, document rendering styles, and application visual system
 - `src/pdf.worker.ts`: background PDF parsing and OCR preparation
 - `src/components/`: reusable preview, notification, history, information, and API-key UI
@@ -36,6 +36,12 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/document-analysis.ts`: one-request glossary, character, and style analysis
 - `src/lib/document-memory.ts`: whole-document, chapter, and recent-summary memory plus stable term merging
 - `src/lib/translation-quality.ts`: deterministic protected-content and Markdown integrity checks
+- `src/lib/protected-content.ts`: reversible placeholders for code, URLs, email, math, link targets, and HTML
+- `src/lib/sentence-segments.ts`: stable sentence IDs, omission localization, and targeted repair application
+- `src/lib/translation-runner.ts`: per-chunk draft, correction, sentence repair, protected-content restore, and validation pipeline
+- `src/lib/chapter-proofreading.ts`: bounded chapter-level consistency review schema and boundaries
+- `src/lib/document-types.ts`: automatic and explicit document-type translation rules
+- `src/lib/translation-state-machine.ts`: explicit translation lifecycle states
 - `src/lib/structured-output.ts`: shared Gemini/OpenAI JSON Schema request configuration
 - `src/lib/translation-budget.ts`: token usage accounting, cost ceilings, and retry bounds
 - `src/hooks/useTranslationUsage.ts`: translation-run usage state
@@ -104,6 +110,10 @@ npm start
 - Document analysis samples across the whole file within a 50,000-character budget instead of reading only the beginning.
 - Translation chunks use a provider-independent 1,800-token estimate and preserve Markdown blocks; fenced code is indivisible.
 - Analysis and correction requests use strict JSON Schema Structured Outputs for both Gemini and OpenAI.
+- Translation source is tagged with stable sentence IDs; missing IDs trigger targeted sentence repair before a full chunk retry.
+- Code blocks, inline code, link targets, URLs, email addresses, math, and HTML tags are replaced by reversible placeholders during model calls.
+- Users can choose automatic, novel, technical, academic, business/legal, or general translation rules.
+- Optional chapter consistency proofreading runs at headings, the document end, or after six chunks, and keeps the chunk-level result if review validation fails.
 - A corrected chunk must pass deterministic checks for headings, URLs, link targets, code, footnotes, fences, and severe truncation before it is accepted. Numbers are reported as non-blocking warnings.
 - Layered translation memory separates a global summary, up to 24 chapter summaries, the latest six developments, and the immediate prior source/translation context.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
@@ -126,4 +136,3 @@ The 2026-08-31 redesign changes the previous dark, information-heavy interface i
 - stacked responsive layout on smaller screens
 
 The functional workflow remains unchanged.
-

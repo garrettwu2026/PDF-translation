@@ -6,6 +6,8 @@ type TranslationContext = {
   previousSourceText: string;
   previousTranslatedText: string;
   customInstructions: string;
+  documentTypeInstruction?: string;
+  preservePlaceholdersInstruction?: string;
 };
 
 type CorrectionContext = {
@@ -15,6 +17,7 @@ type CorrectionContext = {
   characterMap: string;
   customInstructions: string;
   deterministicFindings?: string;
+  documentTypeInstruction?: string;
 };
 
 export type CorrectionResult = {
@@ -24,6 +27,7 @@ export type CorrectionResult = {
   chunkSummary: string;
   foundHallucinations: boolean;
   missingContentDetected: boolean;
+  missingSentenceIds: string[];
 };
 
 export const CORRECTION_SCHEMA = {
@@ -38,8 +42,9 @@ export const CORRECTION_SCHEMA = {
       chunkSummary: { type: 'string' },
       foundHallucinations: { type: 'boolean' },
       missingContentDetected: { type: 'boolean' },
+      missingSentenceIds: { type: 'array', items: { type: 'string' } },
     },
-    required: ['correctedTranslation', 'newTerms', 'newCharacters', 'chunkSummary', 'foundHallucinations', 'missingContentDetected'],
+    required: ['correctedTranslation', 'newTerms', 'newCharacters', 'chunkSummary', 'foundHallucinations', 'missingContentDetected', 'missingSentenceIds'],
   },
 } as const;
 
@@ -59,11 +64,16 @@ export const buildTranslationSystemInstruction = ({
   previousSourceText,
   previousTranslatedText,
   customInstructions,
+  documentTypeInstruction,
+  preservePlaceholdersInstruction,
 }: TranslationContext) => `你是一位世界級的專業翻譯專家與資深編譯專家，精通各種文體的正體中文翻譯。你不僅擅長長篇小說、技術文件與各類科技、科學領域（如：人工智慧、生物工程、物理學、資訊安全等），更深耕於文學小說、社會科學、歷史、經濟、政治等各類文學與非文學著作。
 你的唯一任務是將使用者提供的文本翻譯成精確、優雅且符合各專業領域規範的繁體中文。
 
 【全域翻譯指南與風格】：
 ${style}
+
+【文件類型專用規則】：
+${documentTypeInstruction || '使用一般文件翻譯規則。'}
 
 【全域術語表 (Glossary)】：
 請嚴格遵守以下術語表，確保譯名完全一致：
@@ -92,7 +102,8 @@ ${previousTranslatedText}` : ''}
 6. 嚴格保留原文的 Markdown 格式與分段結構：確保標題、段落、清單等格式與原文完全一致，不要將段落合併（除非是為了修復對話排版，見第9點）。
 7. 純譯文輸出：嚴禁在翻譯結果中保留或夾雜原始語言（如英文）的「句子或段落」，絕對不要輸出「原文+譯文」的雙語對照格式。除了專有名詞後方的括號註釋外，整份輸出必須是純粹的繁體中文。
 8. 雙關語與隱喻處理：請敏銳偵測原文中的雙關語、幽默、隱喻或言外之意。盡可能在譯文中重現對等的修辭效果與雙重語意；若中英文無法完美對應，請以最符合上下文語境的方式進行「意譯」，切勿生硬直譯導致失去原有的文字趣味。
-9. 強制對話換行：這是極度重要的規則！只要遇到人物對話（通常包含在引號內），**必須強制獨立成段（換行）**。即使原文中多個角色的對話、或是對話與敘事描述擠在同一個段落，你也**絕對要主動將它們拆分成不同的段落**。每個角色的對話必須獨立一行，並使用繁體中文標準引號（「」與『』）。
+9. 文中的 [[PDFT_SEG:SXXXX]] 是句子追蹤標記，必須逐字保留在對應譯句之前，不得刪除、翻譯、重排或自行新增。
+${preservePlaceholdersInstruction ? `10. ${preservePlaceholdersInstruction}\n` : ''}
 ${customInstructions ? `\n【使用者自訂指示 (Custom Instructions)】：\n請嚴格遵守以下由使用者針對此文本提供的特殊翻譯指示：\n${customInstructions}\n` : ''}`;
 
 export const buildTranslationPrompt = (sourceText: string) => `請翻譯以下文本。
@@ -106,6 +117,7 @@ export const buildCorrectionPrompt = ({
   characterMap,
   customInstructions,
   deterministicFindings,
+  documentTypeInstruction,
 }: CorrectionContext) => `請對以下翻譯進行嚴格的自我校對，並提取新出現的專有名詞與劇情發展。
 
 【原文】：
@@ -123,6 +135,9 @@ ${characterMap}
 【程式化完整性檢查】：
 ${deterministicFindings || '- 尚未提供程式化檢查結果。'}
 
+【文件類型專用規則】：
+${documentTypeInstruction || '使用一般文件翻譯規則。'}
+
 【任務 1：自我校對與零漏譯檢查】：
 請檢查初稿是否有：
 1. **漏譯或誤譯**：檢查是否有任何句子、段落被跳過或未翻譯。
@@ -132,8 +147,9 @@ ${deterministicFindings || '- 尚未提供程式化檢查結果。'}
 5. **格式檢查**：確保譯文保留了原文所有的 Markdown 標記（如 # 標題、* 列表等）以及正確的分段與換行。
 6. **夾雜原文檢查 (極度重要)**：確保初稿中沒有殘留未翻譯的英文「句子或段落」（絕對不可包含雙語對照的段落）。如果發現整句或整段未翻譯的英文，請務必將其翻譯為繁體中文。除了專有名詞的括號註釋外，最終輸出必須是 100% 的繁體中文。
 7. **雙關語與語氣檢查**：確認原文中的雙關語、隱喻或特殊語氣是否被妥善保留並轉化為自然流暢的中文，避免生硬直譯。
-8. **強制對話換行檢查**：這是極度重要的檢查！仔細審視所有對話。如果同一個段落內包含兩個以上角色的對話，或者對話與大段敘事描述擠在一起，**必須強制拆分成多個段落（換行）**。確保每個角色的對話都獨立一行。
-${customInstructions ? `9. **使用者自訂指示檢查**：請確保譯文完全符合以下使用者自訂指示：\n${customInstructions}\n` : ''}
+8. **文件類型規則檢查**：確認譯文符合上方文件類型專用規則，不要把小說排版規則套用到技術、學術或法律文件。
+9. **句子標記檢查**：逐一核對 [[PDFT_SEG:SXXXX]]；missingSentenceIds 必須列出原文存在但譯文缺少或對應譯句為空的 ID，否則回傳空陣列。
+${customInstructions ? `10. **使用者自訂指示檢查**：請確保譯文完全符合以下使用者自訂指示：\n${customInstructions}\n` : ''}
 請直接提供修正後的「最終完美譯文」。
 
 【任務 2：動態上下文提取】：
@@ -156,9 +172,10 @@ export const parseCorrectionResult = (responseText: string): CorrectionResult =>
     || typeof parsed.chunkSummary !== 'string'
     || typeof parsed.foundHallucinations !== 'boolean'
     || typeof parsed.missingContentDetected !== 'boolean'
+    || !Array.isArray(parsed.missingSentenceIds)
+    || !parsed.missingSentenceIds.every((value) => typeof value === 'string')
   ) {
     throw new Error('Correction response does not match the required schema');
   }
   return parsed as CorrectionResult;
 };
-
