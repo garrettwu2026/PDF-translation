@@ -123,3 +123,18 @@ Decisions and outcome:
 - Reduced `App.tsx` from 2,369 to 1,917 lines without changing the complete translation and correction prompt rules.
 - Expanded the automated suite from 17 to 21 tests.
 - Validation: strict TypeScript, 21 unit tests, and production build passed.
+
+### High-priority reliability and further App decomposition
+
+User request:
+
+> Implement every remaining high-priority item and split `App.tsx` further.
+
+Decisions and outcome:
+
+- Connected the stop control to provider-level abort signals, retry waits, token counting, and PDF worker cancellation.
+- Added a configurable USD run budget and 1–6 retry limit; preflight over-budget jobs are blocked and runtime limit stops preserve resumable history.
+- Added history retention capped at 25 newest records and approximately 12 million stored characters.
+- Extracted usage tracking, budget logic, browser exports, and converter PDF extraction from `App.tsx`.
+- Added Playwright browser integration coverage and a GitHub Actions E2E workflow.
+- Validation: strict TypeScript, 26 unit tests, production build, E2E discovery, and an interactive browser smoke test passed.

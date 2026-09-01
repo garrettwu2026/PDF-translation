@@ -19,7 +19,38 @@ export interface HistoryRecord {
 const DB_NAME = 'pdf-translator-db';
 const STORE_NAME = 'history';
 const DB_VERSION = 1;
+export const HISTORY_MAX_RECORDS = 25;
+export const HISTORY_MAX_CHARACTERS = 12_000_000;
 let databasePromise: Promise<IDBDatabase> | null = null;
+
+export const estimateHistoryRecordCharacters = (record: HistoryRecord) =>
+  record.title.length
+  + record.author.length
+  + (record.coverImage?.length ?? 0)
+  + record.extractedText.length
+  + record.translatedText.length
+  + (record.translationStyle?.length ?? 0)
+  + (record.glossaryText?.length ?? 0)
+  + (record.characterMap?.length ?? 0)
+  + (record.plotSummary?.length ?? 0);
+
+export const selectHistoryRecordsToKeep = (
+  records: HistoryRecord[],
+  maxRecords = HISTORY_MAX_RECORDS,
+  maxCharacters = HISTORY_MAX_CHARACTERS,
+) => {
+  const sorted = [...records].sort((a, b) => b.timestamp - a.timestamp);
+  const keep: HistoryRecord[] = [];
+  let characters = 0;
+  for (const record of sorted) {
+    const recordCharacters = estimateHistoryRecordCharacters(record);
+    const isNewest = keep.length === 0;
+    if (!isNewest && (keep.length >= maxRecords || characters + recordCharacters > maxCharacters)) continue;
+    keep.push(record);
+    characters += recordCharacters;
+  }
+  return { keep, deleteIds: sorted.filter((record) => !keep.includes(record)).map((record) => record.id), characters };
+};
 
 export const initDB = (): Promise<IDBDatabase> => {
   if (databasePromise) return databasePromise;
@@ -65,7 +96,15 @@ const waitForTransaction = (transaction: IDBTransaction): Promise<void> =>
 export const saveHistory = async (record: HistoryRecord): Promise<void> => {
   const db = await initDB();
   const transaction = db.transaction(STORE_NAME, 'readwrite');
-  transaction.objectStore(STORE_NAME).put(record);
+  const store = transaction.objectStore(STORE_NAME);
+  const request = store.getAll();
+  request.onsuccess = () => {
+    const existing = (request.result as HistoryRecord[]).filter((item) => item.id !== record.id);
+    const { deleteIds } = selectHistoryRecordsToKeep([...existing, record]);
+    for (const id of deleteIds) store.delete(id);
+    store.put(record);
+  };
+  request.onerror = () => transaction.abort();
   await waitForTransaction(transaction);
 };
 

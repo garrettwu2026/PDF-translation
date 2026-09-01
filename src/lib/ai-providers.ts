@@ -17,6 +17,7 @@ export type GenerateContentOptions = {
   base64Pdf?: string;
   temperature?: number;
   jsonMode?: boolean;
+  signal?: AbortSignal;
 };
 
 export type GenerateStreamOptions = {
@@ -24,6 +25,7 @@ export type GenerateStreamOptions = {
   systemInstruction?: string;
   promptText: string;
   temperature?: number;
+  signal?: AbortSignal;
 };
 
 export type ProviderCredentials = {
@@ -58,6 +60,7 @@ export const generateContent = async (
         temperature: options.temperature ?? 0.1,
         systemInstruction: options.systemInstruction,
         responseMimeType: options.jsonMode ? 'application/json' : undefined,
+        abortSignal: options.signal,
       },
     });
     return { text: response.text || '', usageMetadata: response.usageMetadata };
@@ -77,7 +80,7 @@ export const generateContent = async (
     messages,
     temperature: options.temperature ?? 0.1,
     response_format: options.jsonMode ? { type: 'json_object' } : undefined,
-  });
+  }, { signal: options.signal });
   return {
     text: response.choices[0].message.content || '',
     usageMetadata: {
@@ -102,6 +105,7 @@ export async function* generateContentStream(
       config: {
         systemInstruction: options.systemInstruction,
         temperature: options.temperature ?? 0.2,
+        abortSignal: options.signal,
       },
     });
     for await (const chunk of stream) {
@@ -122,7 +126,7 @@ export async function* generateContentStream(
     temperature: options.temperature ?? 0.2,
     stream: true,
     stream_options: { include_usage: true },
-  });
+  }, { signal: options.signal });
   for await (const chunk of stream) {
     yield {
       text: chunk.choices?.[0]?.delta?.content || '',

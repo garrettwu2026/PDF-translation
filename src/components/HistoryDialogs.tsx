@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react';
 import { AlertCircle, CheckCircle2, Clock, History, Loader2, Trash2, X } from 'lucide-react';
-import type { HistoryRecord } from '../lib/db';
+import { HISTORY_MAX_RECORDS, type HistoryRecord } from '../lib/db';
 
 type HistoryModalProps = {
   records: HistoryRecord[];
@@ -40,6 +40,9 @@ export function HistoryModal({ records, currentFileId, onClose, onLoad, onReques
               </div>
             ))}</div>
           )}
+        </div>
+        <div className="border-t border-slate-800 px-6 py-3 text-xs text-slate-500">
+          已保存 {records.length}/{HISTORY_MAX_RECORDS} 筆；超過數量或容量上限時會自動移除最舊紀錄。
         </div>
       </div>
     </div>

@@ -33,6 +33,10 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/file-limits.ts`: shared PDF/Markdown upload and PDF page limits
 - `src/lib/models.ts`: centralized provider model catalog, prices, and cost calculations
 - `src/lib/document-analysis.ts`: one-request glossary, character, and style analysis
+- `src/lib/translation-budget.ts`: token usage accounting, cost ceilings, and retry bounds
+- `src/hooks/useTranslationUsage.ts`: translation-run usage state
+- `src/lib/browser-exports.ts`: Markdown, EPUB, and safe print export helpers
+- `src/lib/pdf-text-extraction.ts`: converter-mode PDF text extraction
 - `src/components/MarkdownPreview.tsx`: lazily loaded Markdown renderer
 - `server.ts`: Express/Vite server and health endpoint
 - `server/epub.ts`: EPUB request validation, sanitization, and generation
@@ -69,6 +73,7 @@ Official references:
 npm ci
 npm run dev
 npm run check
+npm run test:e2e
 npm start
 ```
 
@@ -81,6 +86,9 @@ npm start
 - Preserve IndexedDB history compatibility.
 - API keys default to `sessionStorage`; persistent `localStorage` is only used when the user explicitly enables “remember on this device”. The stored value is encoded, not encrypted.
 - PDF worker messages are request-scoped and use acknowledgement backpressure. Preserve cancellation and stale-response guards when changing extraction or token counting.
+- Translation requests receive an `AbortSignal`; keep provider calls, retry delays, and worker cancellation connected to the same stop action.
+- The default run budget is USD 5 and the retry ceiling is user-adjustable from 1–6. A budget stop must preserve resumable history.
+- Browser history is automatically retained to the newest 25 records within an approximate 12-million-character capacity.
 - Keep model IDs, provider mapping, and displayed prices centralized in `src/lib/models.ts`; do not duplicate the catalog in UI components.
 - Initial document analysis intentionally combines glossary, character map, and style guide into one structured AI request to avoid paying for repeated source input.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.

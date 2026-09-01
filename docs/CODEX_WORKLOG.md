@@ -67,3 +67,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - Reduced `src/App.tsx` from 2,369 to 1,917 lines while retaining the complete prompt rules.
 - Added API-key storage and prompt-builder tests, increasing the suite from 17 to 21 tests.
 - Validation: strict TypeScript, all 21 unit tests, and production build passed.
+
+## 2026-09-01 — High-priority reliability and browser E2E
+
+- Added real provider-request abort propagation for Gemini and OpenAI, cancellable retry waits, and cancellable token counting.
+- Added a USD translation-run ceiling, configurable retry limit, live usage enforcement, and resumable budget stops.
+- Added bounded IndexedDB history retention: newest 25 records within an approximate 12-million-character capacity.
+- Extracted translation usage state, budget rules, export helpers, and converter PDF extraction from `App.tsx`.
+- Added Playwright E2E coverage for limits, API-key/history dialogs, mode switching, Markdown upload, and preview rendering.
+- Added a dedicated GitHub Actions browser-E2E workflow.
+- Validation: strict TypeScript, all 26 unit tests, production build, E2E test discovery, and local interactive browser smoke test passed.
