@@ -254,9 +254,10 @@ export function assessTranslationQuality(
   const missingTerms = parseGlossaryEntries(options.glossary)
     .filter((entry) => includesTerm(source, entry.source) && !includesTerm(translation, entry.target));
   if (missingTerms.length) {
+    const severity = options.documentType && HIGH_PRECISION_TYPES.has(options.documentType) ? 'error' : 'warning';
     issues.push(issue(
       'missing_glossary_term',
-      'error',
+      severity,
       '譯文未遵守指定術語。',
       missingTerms.slice(0, 5).map((entry) => `${entry.source} → ${entry.target}`).join(', '),
     ));

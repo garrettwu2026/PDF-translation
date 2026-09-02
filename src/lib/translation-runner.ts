@@ -86,6 +86,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
     documentTypeInstruction: options.documentTypeInstruction,
     preservePlaceholdersInstruction: formatProtectedContentInstruction(protectedSource.entries),
   });
+  let semanticReviewAttempted = false;
 
   for (let attempt = 0; attempt < options.retryLimit; attempt++) {
     let draft = '';
@@ -168,7 +169,8 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         documentType: options.documentType,
         correctionUncertain: correction.foundHallucinations || correction.missingContentDetected,
       });
-      if (riskySentences.length) {
+      if (riskySentences.length && !semanticReviewAttempted) {
+        semanticReviewAttempted = true;
         options.onStage('semantic_review', `正在複審 ${riskySentences.length} 個高風險句子 (第 ${options.chunkNumber}/${options.totalChunks} 部分)...`);
         options.onWarning?.('translation_selective_semantic_review', { count: riskySentences.length, chunk: options.chunkNumber });
         try {

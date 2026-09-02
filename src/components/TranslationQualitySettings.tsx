@@ -45,7 +45,7 @@ export default function TranslationQualitySettings({
         </span>
       </label>
       <p className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2 text-xs leading-5 text-slate-400">
-        系統會自動檢查否定、條件、數字、單位與指定術語；只有高風險句子才會使用同供應商的高品質模型複審，並計入費用上限。
+        系統會自動檢查否定、條件、數字、單位與指定術語；每段最多複審一次，並以同供應商的均衡模型控制成本。
       </p>
     </div>
   );

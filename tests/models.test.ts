@@ -13,9 +13,12 @@ test('sampling config omits unsupported GPT-5.6 temperatures', () => {
   assert.deepEqual(getTemperatureConfig(getModelConfig('gemini-3.7-flash'), 0.1), { temperature: 0.1 });
 });
 
-test('selective quality review stays with the provider and uses its strongest catalog model', () => {
-  assert.equal(getQualityReviewModelId('gemini-3.5-flash-lite'), 'gemini-3.1-pro-preview');
-  assert.equal(getQualityReviewModelId('gpt-5.6-terra'), 'gpt-5.6-sol');
+test('selective quality review stays with the provider and avoids an unnecessary premium-model upgrade', () => {
+  assert.equal(getQualityReviewModelId('gemini-3.5-flash-lite'), 'gemini-3.7-flash');
+  assert.equal(getQualityReviewModelId('gemini-3.1-pro-preview'), 'gemini-3.1-pro-preview');
+  assert.equal(getQualityReviewModelId('gpt-5.6-luna'), 'gpt-5.6-terra');
+  assert.equal(getQualityReviewModelId('gpt-5.6-terra'), 'gpt-5.6-terra');
+  assert.equal(getQualityReviewModelId('gpt-5.6-sol'), 'gpt-5.6-sol');
 });
 
 test('token cost calculation uses per-million-token prices', () => {

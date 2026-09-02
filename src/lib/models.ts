@@ -54,7 +54,10 @@ export const getModelConfig = (modelId: string) =>
 
 export const getQualityReviewModelId = (modelId: string) => {
   const model = getModelConfig(modelId);
-  return model.provider === 'google' ? 'gemini-3.1-pro-preview' : 'gpt-5.6-sol';
+  if (model.provider === 'google') {
+    return model.id === 'gemini-3.1-pro-preview' ? model.id : 'gemini-3.7-flash';
+  }
+  return model.id === 'gpt-5.6-sol' ? model.id : 'gpt-5.6-terra';
 };
 
 export const getTemperatureConfig = (model: ModelConfig, temperature: number) =>

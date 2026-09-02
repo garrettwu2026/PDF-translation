@@ -154,3 +154,10 @@ All dates use Asia/Taipei unless noted otherwise.
 - Added coordinate-aware PDF two-column ordering, repeated header/footer and page-number removal, and line/hyphen repair across page boundaries.
 - Expanded sanitized quality coverage to general, novel, technical, academic, and business/legal documents, plus PDF layout and review-pipeline integration.
 - Validation: strict TypeScript, all 87 unit tests, the expanded quality gate, and production build passed.
+
+## 2026-09-02 — Bounded semantic-review cost
+
+- Prevented deterministic chunk retries from repeatedly purchasing semantic review for the same chunk.
+- Made glossary drift non-blocking in novel and general modes while retaining it as a review signal and preserving strict enforcement for precision document modes.
+- Routed non-premium OpenAI review to GPT-5.6 Terra and non-premium Gemini review to Gemini 3.7 Flash; explicitly selected Sol and Pro models remain unchanged.
+- Added regression tests for economical reviewer selection, novel glossary behavior, and the one-review-per-chunk guarantee.

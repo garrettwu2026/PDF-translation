@@ -101,6 +101,53 @@ test('chunk pipeline selectively sends risky meaning to the stronger review mode
     onPreview: () => undefined,
     onStage: () => undefined,
   });
-  assert.deepEqual(models, ['gpt-5.6-luna', 'gpt-5.6-sol']);
+  assert.deepEqual(models, ['gpt-5.6-luna', 'gpt-5.6-terra']);
   assert.equal(result.translatedText, '供應商不得揭露商業機密。');
+});
+
+test('a chunk retry does not pay for semantic review more than once', async () => {
+  const source = 'The cache policy applies after deployment.';
+  const annotated = annotateTranslationSegments(source);
+  const wrong = `${annotated.segments[0].marker}部署後會套用暫存規則。`;
+  const corrected = `${annotated.segments[0].marker}部署後會套用快取策略。`;
+  const models: string[] = [];
+  let correctionCalls = 0;
+  const result = await translateChunkWithQuality({
+    sourceText: source,
+    model: 'gpt-5.6-luna',
+    chunkNumber: 1,
+    totalChunks: 1,
+    retryLimit: 2,
+    style: '正式',
+    glossary: '- cache policy: 快取策略',
+    characterMap: '無',
+    plotSummary: '',
+    previousSourceText: '',
+    previousTranslatedText: '',
+    customInstructions: '',
+    documentTypeInstruction: '技術文件',
+    documentType: 'technical',
+    signal: new AbortController().signal,
+    generateStream: async function* () { yield { text: wrong }; },
+    generate: async ({ model }) => {
+      models.push(model);
+      if (model === 'gpt-5.6-terra') return { text: '{"revisions":[]}' };
+      correctionCalls++;
+      return { text: JSON.stringify({
+        correctedTranslation: correctionCalls === 1 ? wrong : corrected,
+        newTerms: [],
+        newCharacters: [],
+        chunkSummary: '',
+        foundHallucinations: false,
+        missingContentDetected: false,
+        missingSentenceIds: [],
+      }) };
+    },
+    onUsage: () => undefined,
+    onPreview: () => undefined,
+    onStage: () => undefined,
+  });
+  assert.equal(models.filter((model) => model === 'gpt-5.6-terra').length, 1);
+  assert.equal(correctionCalls, 2);
+  assert.equal(result.translatedText, '部署後會套用快取策略。');
 });

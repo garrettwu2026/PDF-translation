@@ -251,3 +251,16 @@ Decisions and outcome:
 - Account mixed translation/review usage using each model's real catalog price under the same user-defined budget.
 - Share coordinate-aware PDF ordering, repeated header/footer removal, page-number cleanup, and cross-page line repair across translation and converter extraction.
 - Expand the sanitized benchmark across general, novel, technical, academic, and business/legal cases plus PDF layout and selective-review tests.
+
+### Repeated novel review and review-model cost
+
+User report:
+
+> A novel appears to keep reviewing the first chunk, and GPT-5.6 Sol is too expensive for review.
+
+Decisions and outcome:
+
+- Limit semantic review to one paid request per chunk, even when deterministic quality checks retry that chunk.
+- Treat novel and general glossary drift as a non-blocking warning that can trigger review, while retaining blocking glossary enforcement for technical, academic, and business/legal modes.
+- Use GPT-5.6 Terra for OpenAI review unless the user explicitly selected Sol; use Gemini 3.7 Flash unless the user explicitly selected Gemini 3.1 Pro Preview.
+- Add regression coverage for both model routing and a quality retry after an unsuccessful semantic review.

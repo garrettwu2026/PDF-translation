@@ -76,3 +76,12 @@ test('does not match a short Latin glossary term inside another word', () => {
   });
   assert.equal(report.issues.some((item) => item.code === 'missing_glossary_term'), false);
 });
+
+test('novel glossary drift triggers review without blocking the whole chunk', () => {
+  const report = assessTranslationQuality('Alice entered the room.', '艾莉絲走進房間。', {
+    documentType: 'novel',
+    glossary: '- Alice: 愛麗絲',
+  });
+  assert.equal(report.blocking, false);
+  assert.ok(report.issues.some((item) => item.code === 'missing_glossary_term' && item.severity === 'warning'));
+});
