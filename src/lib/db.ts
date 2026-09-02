@@ -15,6 +15,7 @@ export interface HistoryRecord {
   characterMap?: string;
   plotSummary?: string;
   documentType?: string;
+  effectiveDocumentType?: string;
   chapterProofreading?: boolean;
 }
 

@@ -1,12 +1,18 @@
+import type { DetectedDocumentType } from './document-types.ts';
+
 export type TranslationQualityIssueCode =
   | 'empty_translation'
   | 'suspiciously_short'
+  | 'suspiciously_long'
+  | 'repeated_paragraph'
+  | 'source_language_residue'
   | 'missing_heading'
   | 'missing_url'
   | 'missing_link_target'
   | 'missing_code'
   | 'missing_footnote'
   | 'missing_number'
+  | 'added_number'
   | 'unbalanced_code_fence';
 
 export type TranslationQualityIssue = {
@@ -30,6 +36,9 @@ const collectMatches = (text: string, pattern: RegExp, group = 0) => {
   return unique(values);
 };
 
+const collectAllMatches = (text: string, pattern: RegExp, group = 0) =>
+  [...text.matchAll(pattern)].map((match) => match[group] || '').filter(Boolean);
+
 const countMatches = (text: string, pattern: RegExp) => [...text.matchAll(pattern)].length;
 
 const normalizeNumber = (value: string) => value
@@ -39,8 +48,18 @@ const normalizeNumber = (value: string) => value
   .trim();
 
 const missingValues = (sourceValues: string[], targetValues: string[], normalize = (value: string) => value) => {
-  const normalizedTargets = new Set(targetValues.map(normalize));
-  return sourceValues.filter((value) => !normalizedTargets.has(normalize(value)));
+  const normalizedTargets = new Map<string, number>();
+  for (const value of targetValues) {
+    const normalized = normalize(value);
+    normalizedTargets.set(normalized, (normalizedTargets.get(normalized) ?? 0) + 1);
+  }
+  return sourceValues.filter((value) => {
+    const normalized = normalize(value);
+    const remaining = normalizedTargets.get(normalized) ?? 0;
+    if (remaining <= 0) return true;
+    normalizedTargets.set(normalized, remaining - 1);
+    return false;
+  });
 };
 
 const issue = (
@@ -50,7 +69,16 @@ const issue = (
   evidence?: string,
 ): TranslationQualityIssue => ({ code, severity, message, evidence });
 
-export function assessTranslationQuality(source: string, translation: string): TranslationQualityReport {
+export type TranslationQualityOptions = { documentType?: DetectedDocumentType };
+
+const NUMBER_PATTERN = /(?:(?:NT\$|US\$|[$€£¥])\s*)?(?:\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:%|％)?/gu;
+const HIGH_PRECISION_TYPES = new Set<DetectedDocumentType>(['technical', 'academic', 'business_legal']);
+
+export function assessTranslationQuality(
+  source: string,
+  translation: string,
+  options: TranslationQualityOptions = {},
+): TranslationQualityReport {
   const issues: TranslationQualityIssue[] = [];
   const compactSource = source.replace(/\s+/g, '');
   const compactTarget = translation.replace(/\s+/g, '');
@@ -59,6 +87,30 @@ export function assessTranslationQuality(source: string, translation: string): T
     issues.push(issue('empty_translation', 'error', '譯文為空白。'));
   } else if (compactSource.length >= 120 && compactTarget.length < compactSource.length * 0.15) {
     issues.push(issue('suspiciously_short', 'error', '譯文長度異常，可能有大範圍漏譯。'));
+  } else if (compactSource.length >= 200 && compactTarget.length > compactSource.length * 3.5 && compactTarget.length - compactSource.length > 300) {
+    issues.push(issue('suspiciously_long', 'error', '譯文長度異常膨脹，可能加入了原文沒有的內容。'));
+  }
+
+  const normalizeParagraphs = (text: string) => text
+    .split(/\n{2,}/)
+    .map((value) => value.replace(/\s+/g, ' ').trim())
+    .filter((value) => value.length >= 40);
+  const sourceParagraphCounts = new Map<string, number>();
+  for (const paragraph of normalizeParagraphs(source)) {
+    sourceParagraphCounts.set(paragraph, (sourceParagraphCounts.get(paragraph) ?? 0) + 1);
+  }
+  const targetParagraphCounts = new Map<string, number>();
+  for (const paragraph of normalizeParagraphs(translation)) {
+    targetParagraphCounts.set(paragraph, (targetParagraphCounts.get(paragraph) ?? 0) + 1);
+  }
+  const repeatedParagraph = [...targetParagraphCounts].find(([paragraph, count]) => count > 1 && count > (sourceParagraphCounts.get(paragraph) ?? 0))?.[0];
+  if (repeatedParagraph) issues.push(issue('repeated_paragraph', 'error', '譯文出現完全重複的長段落。', repeatedParagraph.slice(0, 80)));
+
+  const sourceLatin = (source.match(/[A-Za-z]/g) ?? []).length;
+  const targetLatin = (translation.match(/[A-Za-z]/g) ?? []).length;
+  const targetCjk = (translation.match(/[\p{Script=Han}]/gu) ?? []).length;
+  if (compactSource.length >= 120 && sourceLatin > compactSource.length * 0.55 && targetLatin > 80 && targetLatin > targetCjk * 2) {
+    issues.push(issue('source_language_residue', 'warning', '譯文保留大量原文語言，可能有未翻譯段落。'));
   }
 
   const sourceHeadingCount = countMatches(source, /^#{1,6}\s+/gm);
@@ -111,9 +163,9 @@ export function assessTranslationQuality(source: string, translation: string): T
     },
     {
       code: 'missing_number',
-      severity: 'warning',
-      values: collectMatches(source, /(?:(?:NT\$|[$€£¥])\s*)?\d[\d,.]*(?:\.\d+)?(?:%|％)?/gu),
-      targetValues: collectMatches(translation, /(?:(?:NT\$|[$€£¥])\s*)?\d[\d,.]*(?:\.\d+)?(?:%|％)?/gu),
+      severity: options.documentType && HIGH_PRECISION_TYPES.has(options.documentType) ? 'error' : 'warning',
+      values: collectAllMatches(source, NUMBER_PATTERN),
+      targetValues: collectAllMatches(translation, NUMBER_PATTERN),
       message: '譯文可能遺失數字、金額或百分比。',
       normalize: normalizeNumber,
     },
@@ -124,6 +176,16 @@ export function assessTranslationQuality(source: string, translation: string): T
     if (missing.length) {
       issues.push(issue(check.code, check.severity, check.message, missing.slice(0, 5).join(', ')));
     }
+  }
+
+  const addedNumbers = missingValues(
+    collectAllMatches(translation, NUMBER_PATTERN),
+    collectAllMatches(source, NUMBER_PATTERN),
+    normalizeNumber,
+  );
+  if (addedNumbers.length) {
+    const severity = options.documentType && HIGH_PRECISION_TYPES.has(options.documentType) ? 'error' : 'warning';
+    issues.push(issue('added_number', severity, '譯文加入原文沒有的數字、金額或百分比。', addedNumbers.slice(0, 5).join(', ')));
   }
 
   const sourceFenceCount = countMatches(source, /^```/gm);

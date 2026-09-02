@@ -205,3 +205,19 @@ Decisions and outcome:
 - Preserve the existing simple layout and functionality while increasing color through low-saturation ambient gradients.
 - Color-code workflow cards with violet, teal, warm coral, and blue/teal accents so sections are easier to distinguish.
 - Add a more expressive brand mark, intro panel, mode switch, result toolbar, and preview surface without reducing text contrast.
+
+## 2026-09-02
+
+### Translation integrity and retry hardening
+
+User request:
+
+> Implement review recommendations 1 through 5.
+
+Decisions and outcome:
+
+- Enforce exact protected-placeholder count and order, rejecting duplication as well as missing or unknown placeholders.
+- Use sentence-aware CJK segmentation and validate marker content, uniqueness, order, and identity before accepting a chunk.
+- Persist the effective automatic document type across history and reanalyze legacy automatic-mode resumes once.
+- Normalize provider errors into permanent and retryable categories, honor Retry-After, and use exponential backoff with jitter for transient failures.
+- Add expansion, duplicate-paragraph, source-language-residue, and bidirectional numeric checks; numeric discrepancies block precision-sensitive document modes.

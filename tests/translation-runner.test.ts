@@ -26,6 +26,7 @@ test('chunk pipeline restores protected content and repairs only a missing sente
     previousTranslatedText: '',
     customInstructions: '',
     documentTypeInstruction: '一般文件',
+    documentType: 'general',
     signal: new AbortController().signal,
     generateStream: async function* () { yield { text: draft }; },
     generate: async () => {

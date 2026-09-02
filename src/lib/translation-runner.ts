@@ -6,6 +6,7 @@ import {
   applySentenceRepairs,
   buildSentenceRepairPrompt,
   findMissingSegmentIds,
+  inspectTranslationSegments,
   parseSentenceRepairs,
   SENTENCE_REPAIR_SCHEMA,
   stripSegmentMarkers,
@@ -18,6 +19,13 @@ import {
   parseCorrectionResult,
 } from './translation-prompts.ts';
 import { assessTranslationQuality, formatQualityIssuesForPrompt } from './translation-quality.ts';
+import type { DetectedDocumentType } from './document-types.ts';
+import {
+  classifyProviderError,
+  formatProviderErrorForUser,
+  getRetryDelayMs,
+  isRetryableProviderError,
+} from './provider-errors.ts';
 
 export type ChunkTranslationResult = {
   translatedText: string;
@@ -40,6 +48,7 @@ type ChunkTranslationOptions = {
   previousTranslatedText: string;
   customInstructions: string;
   documentTypeInstruction: string;
+  documentType: DetectedDocumentType;
   signal: AbortSignal;
   generate: (options: GenerateContentOptions) => Promise<ContentResult>;
   generateStream: (options: GenerateStreamOptions) => AsyncGenerator<ContentResult>;
@@ -88,7 +97,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         if (chunk.usageMetadata) options.onUsage(chunk.usageMetadata);
       }
 
-      const draftQuality = assessTranslationQuality(annotatedSource.text, draft);
+      const draftQuality = assessTranslationQuality(annotatedSource.text, draft, { documentType: options.documentType });
       options.onStage('correcting', `正在自我校對與更新術語 (第 ${options.chunkNumber}/${options.totalChunks} 部分)...`);
       const correctionResponse = await options.generate({
         model: options.model,
@@ -129,13 +138,21 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         throw new TranslationQualityError('Model reported missing content without sentence IDs');
       }
 
-      const stillMissing = findMissingSegmentIds(corrected, annotatedSource.segments);
-      if (stillMissing.length) throw new TranslationQualityError(`Missing sentence markers: ${stillMissing.join(', ')}`);
-      const restored = restoreProtectedContent(stripSegmentMarkers(corrected), protectedSource.entries);
-      if (restored.missing.length || restored.unknown.length) {
-        throw new TranslationQualityError('Protected placeholders were changed or removed');
+      const segmentInspection = inspectTranslationSegments(corrected, annotatedSource.segments);
+      const invalidSegmentIds = [...new Set([
+        ...segmentInspection.missing,
+        ...segmentInspection.empty,
+        ...segmentInspection.duplicates,
+        ...segmentInspection.unknown,
+      ])];
+      if (invalidSegmentIds.length || segmentInspection.outOfOrder) {
+        throw new TranslationQualityError(`Invalid sentence markers: ${invalidSegmentIds.join(', ') || 'out of order'}`);
       }
-      const finalQuality = assessTranslationQuality(options.sourceText, restored.text);
+      const restored = restoreProtectedContent(stripSegmentMarkers(corrected), protectedSource.entries);
+      if (restored.missing.length || restored.unknown.length || restored.duplicates.length || restored.outOfOrder) {
+        throw new TranslationQualityError('Protected placeholders were changed, duplicated, removed, or reordered');
+      }
+      const finalQuality = assessTranslationQuality(options.sourceText, restored.text, { documentType: options.documentType });
       if (finalQuality.blocking) throw new TranslationQualityError('Translation failed deterministic completeness checks');
       options.onPreview(restored.text);
       return {
@@ -146,18 +163,21 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
       };
     } catch (error) {
       if (isAbortError(error) || error instanceof DOMException && error.name === 'AbortError' || (error instanceof Error && error.name === 'TranslationBudgetExceededError')) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      const status = typeof error === 'object' && error && 'status' in error ? Number((error as { status?: unknown }).status) : 0;
-      const retryable = error instanceof TranslationQualityError || status === 429 || /429|quota|rate limit|schema/i.test(message);
+      const providerError = classifyProviderError(error);
+      const retryable = error instanceof TranslationQualityError || isRetryableProviderError(providerError);
       if (!retryable || attempt + 1 >= options.retryLimit) {
-        throw new Error(`翻譯失敗：模型輸出未通過完整性檢查或達到 API 限制。(${message})`);
+        if (error instanceof TranslationQualityError) {
+          throw new Error(`翻譯失敗：模型輸出未通過完整性檢查。(${error.message})`);
+        }
+        throw new Error(formatProviderErrorForUser(providerError));
       }
       options.onWarning?.('translation_chunk_retry', { attempt: attempt + 1, chunk: options.chunkNumber });
-      const waitSeconds = error instanceof TranslationQualityError ? 1 : (attempt + 1) * 5;
+      const waitMilliseconds = error instanceof TranslationQualityError ? 1_000 : getRetryDelayMs(providerError, attempt);
+      const waitSeconds = Math.max(1, Math.ceil(waitMilliseconds / 1000));
       options.onStage('translating', error instanceof TranslationQualityError
         ? `譯文完整性檢查未通過，正在重新嘗試 (${attempt + 1}/${options.retryLimit})...`
-        : `API 限制，等待 ${waitSeconds} 秒後重試...`);
-      await abortableDelay(waitSeconds * 1000, options.signal);
+        : `API 暫時無法使用，等待 ${waitSeconds} 秒後重試...`);
+      await abortableDelay(waitMilliseconds, options.signal);
     }
   }
   throw new Error('Translation retries exhausted');

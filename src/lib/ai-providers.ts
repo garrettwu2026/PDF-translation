@@ -10,6 +10,7 @@ import {
   getOpenAIResponseFormat,
   type StructuredOutputSchema,
 } from './structured-output';
+import { normalizeProviderError } from './provider-errors';
 export type { UsageMetadata } from './provider-usage';
 
 export type ContentResult = {
@@ -46,7 +47,7 @@ const requireKey = (key: string | undefined, providerName: string) => {
   return key;
 };
 
-export const generateContent = async (
+const generateContentRequest = async (
   options: GenerateContentOptions,
   credentials: ProviderCredentials,
 ): Promise<ContentResult> => {
@@ -95,7 +96,19 @@ export const generateContent = async (
   };
 };
 
-export async function* generateContentStream(
+export const generateContent = async (
+  options: GenerateContentOptions,
+  credentials: ProviderCredentials,
+): Promise<ContentResult> => {
+  try {
+    return await generateContentRequest(options, credentials);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError' || error instanceof Error && error.name === 'AbortError') throw error;
+    throw normalizeProviderError(error);
+  }
+};
+
+async function* generateContentStreamRequest(
   options: GenerateStreamOptions,
   credentials: ProviderCredentials,
 ): AsyncGenerator<ContentResult> {
@@ -142,4 +155,14 @@ export async function* generateContentStream(
     };
   }
 }
-
+export async function* generateContentStream(
+  options: GenerateStreamOptions,
+  credentials: ProviderCredentials,
+): AsyncGenerator<ContentResult> {
+  try {
+    yield* generateContentStreamRequest(options, credentials);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError' || error instanceof Error && error.name === 'AbortError') throw error;
+    throw normalizeProviderError(error);
+  }
+}

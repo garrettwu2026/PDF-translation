@@ -57,17 +57,34 @@ export function protectContent(text: string): ProtectedContent {
 }
 
 export function restoreProtectedContent(text: string, entries: ProtectedContentEntry[]) {
+  const placeholderPattern = /__PDFT_PROTECTED_\d{4}__/g;
+  const expected = new Set(entries.map((entry) => entry.placeholder));
+  const encountered = text.match(placeholderPattern) ?? [];
   const missing: string[] = [];
+  const duplicates: string[] = [];
+  const counts = new Map<string, number>();
+  for (const placeholder of encountered) {
+    counts.set(placeholder, (counts.get(placeholder) ?? 0) + 1);
+  }
+  for (const entry of entries) {
+    const count = counts.get(entry.placeholder) ?? 0;
+    if (count === 0) missing.push(entry.placeholder);
+    if (count > 1) duplicates.push(entry.placeholder);
+  }
+  const unknown = [...new Set(encountered.filter((placeholder) => !expected.has(placeholder)))];
+  const expectedPresentOrder = entries
+    .filter((entry) => counts.has(entry.placeholder))
+    .map((entry) => entry.placeholder);
+  const actualKnownOrder = encountered.filter((placeholder) => expected.has(placeholder));
+  const outOfOrder = actualKnownOrder.length !== expectedPresentOrder.length
+    || actualKnownOrder.some((placeholder, index) => placeholder !== expectedPresentOrder[index]);
+
   let restored = text;
   for (const entry of entries) {
-    if (!restored.includes(entry.placeholder)) {
-      missing.push(entry.placeholder);
-      continue;
-    }
+    if (!restored.includes(entry.placeholder)) continue;
     restored = restored.split(entry.placeholder).join(entry.value);
   }
-  const unknown = [...new Set(restored.match(/__PDFT_PROTECTED_\d{4}__/g) ?? [])];
-  return { text: restored, missing, unknown };
+  return { text: restored, missing, unknown, duplicates, outOfOrder };
 }
 
 export const formatProtectedContentInstruction = (entries: ProtectedContentEntry[]) => entries.length

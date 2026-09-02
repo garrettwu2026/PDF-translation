@@ -1,6 +1,6 @@
 # Codex project context
 
-Last updated: 2026-09-01 (Asia/Taipei)
+Last updated: 2026-09-02 (Asia/Taipei)
 
 ## Product
 
@@ -25,6 +25,7 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/pdf.worker.ts`: background PDF parsing and OCR preparation
 - `src/components/`: reusable preview, notification, history, information, and API-key UI
 - `src/lib/ai-providers.ts`: Gemini/OpenAI request adapters
+- `src/lib/provider-errors.ts`: provider-neutral error classification, safe messages, Retry-After parsing, and retry backoff
 - `src/lib/provider-usage.ts`: provider-specific cached/reasoning token normalization
 - `src/lib/api-key-storage.ts`: session-first browser key persistence
 - `src/lib/diagnostics.ts`: content-safe development-only diagnostic events
@@ -110,11 +111,13 @@ npm start
 - Document analysis samples across the whole file within a 50,000-character budget instead of reading only the beginning.
 - Translation chunks use a provider-independent 1,800-token estimate and preserve Markdown blocks; fenced code is indivisible.
 - Analysis and correction requests use strict JSON Schema Structured Outputs for both Gemini and OpenAI.
-- Translation source is tagged with stable sentence IDs; missing IDs trigger targeted sentence repair before a full chunk retry.
-- Code blocks, inline code, link targets, URLs, email addresses, math, and HTML tags are replaced by reversible placeholders during model calls.
+- Translation source is tagged with stable sentence IDs; missing or empty segments trigger targeted repair, while duplicate, unknown, or reordered IDs fail validation.
+- Code blocks, inline code, link targets, URLs, email addresses, math, and HTML tags are replaced by reversible placeholders during model calls. Every placeholder must occur exactly once and remain in source order.
 - Users can choose automatic, novel, technical, academic, business/legal, or general translation rules.
 - Optional chapter consistency proofreading runs at headings, the document end, or after six chunks, and keeps the chunk-level result if review validation fails.
-- A corrected chunk must pass deterministic checks for headings, URLs, link targets, code, footnotes, fences, and severe truncation before it is accepted. Numbers are reported as non-blocking warnings.
+- A corrected chunk must pass deterministic checks for headings, URLs, link targets, code, footnotes, fences, severe truncation/expansion, repeated paragraphs, source-language residue, and numeric fidelity. Missing or invented numbers block technical, academic, and business/legal documents.
+- Automatic document classification persists the resolved mode in history. Legacy automatic-mode records are reanalyzed once when resumed.
+- Provider failures are classified as authentication, invalid request, rate limit, transient, or unknown. Only quality, rate-limit, and transient failures retry; Retry-After is honored when supplied.
 - Layered translation memory separates a global summary, up to 24 chapter summaries, the latest six developments, and the immediate prior source/translation context.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
 - Do not weaken EPUB sanitization or server request limits.

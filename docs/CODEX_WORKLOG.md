@@ -123,3 +123,14 @@ All dates use Asia/Taipei unless noted otherwise.
 - Refined the brand mark, introductory banner, mode switch, selected-model card, result toolbar, and preview panel.
 - Preserved responsive behavior, print/PDF colors, layout, controls, and workflow behavior.
 - Verified the desktop and mobile presentation in the in-app browser with no console errors.
+
+## 2026-09-02 — Translation integrity and provider resilience
+
+- Required protected placeholders to appear exactly once and in original order before restoration.
+- Replaced whitespace-dependent sentence splitting with `Intl.Segmenter` plus a CJK-safe fallback and Markdown-line handling.
+- Added missing, empty, duplicate, unknown, and reordered sentence-marker validation with targeted repair for empty segments.
+- Persisted resolved automatic document types and added a one-time legacy resume analysis path.
+- Added provider-neutral authentication, invalid-request, rate-limit, transient, and unknown error categories with safe messages, Retry-After support, and bounded exponential backoff.
+- Added deterministic excessive-expansion, repeated-paragraph, source-language-residue, missing-number, and invented-number checks with stricter technical, academic, and business/legal handling.
+- Expanded the unit suite from 56 to 66 tests.
+- Validation: strict TypeScript, all 66 unit tests, and production build passed.

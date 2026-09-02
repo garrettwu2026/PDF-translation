@@ -14,6 +14,11 @@ export function normalizeDocumentType(value: unknown): DocumentTypeId {
   return DOCUMENT_TYPES.some((item) => item.id === value) ? value as DocumentTypeId : 'auto';
 }
 
+export function normalizeDetectedDocumentType(value: unknown): DetectedDocumentType | null {
+  const normalized = normalizeDocumentType(value);
+  return normalized === 'auto' ? null : normalized;
+}
+
 export function resolveDocumentType(selected: DocumentTypeId, detected: DetectedDocumentType): DetectedDocumentType {
   return selected === 'auto' ? detected : selected;
 }

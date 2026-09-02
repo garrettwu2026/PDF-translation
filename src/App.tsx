@@ -41,7 +41,14 @@ import {
   updateLayeredDocumentMemory,
 } from './lib/document-memory';
 import TranslationQualitySettings from './components/TranslationQualitySettings';
-import { getDocumentTypeInstruction, normalizeDocumentType, resolveDocumentType, type DocumentTypeId } from './lib/document-types';
+import {
+  getDocumentTypeInstruction,
+  normalizeDetectedDocumentType,
+  normalizeDocumentType,
+  resolveDocumentType,
+  type DetectedDocumentType,
+  type DocumentTypeId,
+} from './lib/document-types';
 import { useTranslationMachine } from './hooks/useTranslationMachine';
 import { translateChunkWithQuality } from './lib/translation-runner';
 import {
@@ -92,6 +99,7 @@ export default function App() {
   const statusMessage = translationMachine.state.statusMessage;
   const setStatusMessage = translationMachine.setStatus;
   const [documentType, setDocumentType] = useState<DocumentTypeId>('auto');
+  const [resolvedDocumentType, setResolvedDocumentType] = useState<DetectedDocumentType | null>(null);
   const [chapterProofreading, setChapterProofreading] = useState(true);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [autoDownload, setAutoDownload] = useState<'none' | 'epub' | 'pdf' | 'md'>('md');
@@ -143,7 +151,12 @@ export default function App() {
     setGlossary(record.glossaryText || '無');
     setCharacterMap(record.characterMap || '');
     setPlotSummary(record.plotSummary || '');
-    setDocumentType(normalizeDocumentType(record.documentType));
+    const restoredDocumentType = normalizeDocumentType(record.documentType);
+    setDocumentType(restoredDocumentType);
+    setResolvedDocumentType(
+      normalizeDetectedDocumentType(record.effectiveDocumentType)
+      ?? (restoredDocumentType === 'auto' ? null : restoredDocumentType),
+    );
     setChapterProofreading(record.chapterProofreading !== false);
     
     setFile(null);
@@ -327,6 +340,7 @@ export default function App() {
     setGlossary('無');
     setCharacterMap('');
     setPlotSummary('');
+    setResolvedDocumentType(null);
     setCustomTitle('');
     
     const reader = new FileReader();
@@ -502,6 +516,7 @@ export default function App() {
       setGlossary('無');
       setCharacterMap('');
       setPlotSummary('');
+      setResolvedDocumentType(null);
     }
     
     translationAbortControllerRef.current?.abort();
@@ -531,6 +546,7 @@ export default function App() {
     let latestGlossary = startingChunk === 0 ? '無' : glossary;
     let latestCharacterMap = startingChunk === 0 ? '' : characterMap;
     let latestPlotSummary = startingChunk === 0 ? '' : plotSummary;
+    let latestEffectiveDocumentType = startingChunk === 0 ? null : resolvedDocumentType;
 
     try {
       throwIfAborted(translationController.signal);
@@ -564,6 +580,7 @@ export default function App() {
           characterMap: currentCharacters || undefined,
           plotSummary: currentPlotSummary || undefined,
           documentType,
+          effectiveDocumentType: latestEffectiveDocumentType || undefined,
           chapterProofreading,
         };
         try {
@@ -717,9 +734,10 @@ export default function App() {
       let detectedStyle = translationStyle || '一般/通用';
       let detectedCharacters = characterMap;
       let globalSummary = '';
-      let detectedDocumentType: 'novel' | 'technical' | 'academic' | 'business_legal' | 'general' = 'general';
+      let detectedDocumentType: DetectedDocumentType = latestEffectiveDocumentType ?? 'general';
       
-      if (startingChunk === 0) {
+      const needsDocumentAnalysis = startingChunk === 0 || (documentType === 'auto' && !latestEffectiveDocumentType);
+      if (needsDocumentAnalysis) {
         translationMachine.transition('analyzing');
         setStatusMessage('正在提取專業術語、角色關係與分析文本風格...');
         
@@ -777,6 +795,8 @@ export default function App() {
       let layeredMemory = createLayeredDocumentMemory(globalSummary, startChunk > 0 ? plotSummary : '');
       let dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
       const effectiveDocumentType = resolveDocumentType(documentType, detectedDocumentType);
+      latestEffectiveDocumentType = effectiveDocumentType;
+      setResolvedDocumentType(effectiveDocumentType);
       const documentTypeInstruction = getDocumentTypeInstruction(effectiveDocumentType);
       let chapterSourceChunks: string[] = [];
       let chapterTranslatedChunks: string[] = [];
@@ -801,6 +821,7 @@ export default function App() {
           previousTranslatedText,
           customInstructions,
           documentTypeInstruction,
+          documentType: effectiveDocumentType,
           signal: translationController.signal,
           generate: generateContentWrapper,
           generateStream: generateContentStreamWrapper,
@@ -854,8 +875,10 @@ export default function App() {
             if (reviewResponse.usageMetadata) recordUsage(reviewResponse.usageMetadata, selectedModel, translationBudgetUsd);
             const review = parseChapterProofreadingResult(reviewResponse.text || '{}');
             const restored = restoreProtectedContent(review.correctedChapter, protectedChapter.entries);
-            const reviewQuality = assessTranslationQuality(sourceChapter, restored.text);
-            if (restored.missing.length || restored.unknown.length || reviewQuality.blocking) throw new Error('Chapter review failed completeness checks');
+            const reviewQuality = assessTranslationQuality(sourceChapter, restored.text, { documentType: effectiveDocumentType });
+            if (restored.missing.length || restored.unknown.length || restored.duplicates.length || restored.outOfOrder || reviewQuality.blocking) {
+              throw new Error('Chapter review failed completeness checks');
+            }
             fullTranslatedText = `${fullTranslatedText.slice(0, chapterStartOffset)}${restored.text}\n\n`;
             currentChunkTranslated = restored.text.slice(-Math.max(1000, currentChunkTranslated.length));
             dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, review.newTerms);
@@ -956,6 +979,7 @@ export default function App() {
           characterMap: latestCharacterMap || undefined,
           plotSummary: latestPlotSummary || undefined,
           documentType,
+          effectiveDocumentType: latestEffectiveDocumentType || undefined,
           chapterProofreading,
         };
         try {

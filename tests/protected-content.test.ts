@@ -14,3 +14,17 @@ test('reports a placeholder removed by a model', () => {
   const result = restoreProtectedContent(protectedValue.text.replace(protectedValue.entries[0].placeholder, ''), protectedValue.entries);
   assert.deepEqual(result.missing, [protectedValue.entries[0].placeholder]);
 });
+
+test('rejects duplicated and reordered protected placeholders', () => {
+  const protectedValue = protectContent('Run `npm test` and visit https://example.com.');
+  const [first, second] = protectedValue.entries;
+  const duplicated = restoreProtectedContent(`${protectedValue.text} ${first.placeholder}`, protectedValue.entries);
+  assert.deepEqual(duplicated.duplicates, [first.placeholder]);
+
+  const reorderedText = protectedValue.text
+    .replace(first.placeholder, '__TEMP__')
+    .replace(second.placeholder, first.placeholder)
+    .replace('__TEMP__', second.placeholder);
+  const reordered = restoreProtectedContent(reorderedText, protectedValue.entries);
+  assert.equal(reordered.outOfOrder, true);
+});
