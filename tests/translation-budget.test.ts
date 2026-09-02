@@ -43,3 +43,13 @@ test('retry limit is clamped to the supported range', () => {
   assert.equal(clampRetryLimit(3.4), 3);
   assert.equal(clampRetryLimit(99), 6);
 });
+
+test('usage meter prices mixed translation and review models independently', () => {
+  const meter = new TranslationUsageMeter();
+  meter.add({ promptTokenCount: 1_000_000 }, getModelConfig('gpt-5.6-luna'));
+  meter.add({ candidatesTokenCount: 100_000 }, getModelConfig('gpt-5.6-sol'));
+  const cost = meter.cost(getModelConfig('gpt-5.6-luna'));
+  assert.equal(cost.inputUsd, 0.2);
+  assert.equal(cost.outputUsd, 2);
+  assert.equal(cost.totalUsd, 2.2);
+});

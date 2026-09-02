@@ -13,6 +13,10 @@ export type TranslationQualityIssueCode =
   | 'missing_footnote'
   | 'missing_number'
   | 'added_number'
+  | 'lost_negation'
+  | 'lost_condition'
+  | 'missing_unit'
+  | 'missing_glossary_term'
   | 'unbalanced_code_fence';
 
 export type TranslationQualityIssue = {
@@ -69,10 +73,46 @@ const issue = (
   evidence?: string,
 ): TranslationQualityIssue => ({ code, severity, message, evidence });
 
-export type TranslationQualityOptions = { documentType?: DetectedDocumentType };
+export type TranslationQualityOptions = {
+  documentType?: DetectedDocumentType;
+  glossary?: string;
+};
 
 const NUMBER_PATTERN = /(?:(?:NT\$|US\$|[$€£¥])\s*)?(?:\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:%|％)?/gu;
 const HIGH_PRECISION_TYPES = new Set<DetectedDocumentType>(['technical', 'academic', 'business_legal']);
+const NEGATION_SOURCE_PATTERN = /\b(?:not|no|never|neither|nor|without|cannot|can't|mustn't|shall\s+not|prohibited?)\b|[不無未非沒勿莫禁止不得]/giu;
+const NEGATION_TARGET_PATTERN = /\b(?:not|no|never|without|cannot|can't|prohibited?)\b|[不無未非沒勿莫]|禁止|不得|最遲/giu;
+const CONDITION_SOURCE_PATTERN = /\b(?:if|unless|provided\s+that|subject\s+to|only\s+if|in\s+the\s+event\s+that)\b|(?:如果|若|倘若|除非|前提|條件)/giu;
+const CONDITION_TARGET_PATTERN = /\b(?:if|unless|provided\s+that|subject\s+to|only\s+if)\b|(?:如果|若|倘若|除非|前提|條件|須視|僅於)/giu;
+const UNIT_PATTERN = /(?:\b(?:kg|g|mg|km|m|cm|mm|mph|km\/h|ms|mb|gb|tb|hz|khz|mhz|ghz|kw|kwh|v|ma)\b|°[cf])/giu;
+
+const normalizeSemanticSource = (text: string) => text
+  .replace(/\bnot\s+only\b/giu, '')
+  .replace(/\bno\s+later\s+than\b/giu, '');
+
+export type GlossaryEntry = { source: string; target: string };
+
+export function parseGlossaryEntries(glossary = ''): GlossaryEntry[] {
+  if (!glossary.trim() || glossary.trim() === '無') return [];
+  const entries: GlossaryEntry[] = [];
+  for (const rawLine of glossary.split('\n')) {
+    const line = rawLine.trim().replace(/^[-*]\s*/, '').replace(/^\[([^\]]+)]\s*[:：]\s*\[([^\]]+)]$/, '$1: $2');
+    const match = line.match(/^(.+?)\s*(?:[:：]|=>|→)\s*(.+)$/u);
+    if (!match) continue;
+    const source = match[1].replace(/^\[|]$/g, '').trim();
+    const target = match[2].replace(/^\[|]$/g, '').trim();
+    if (source && target && source.toLocaleLowerCase() !== target.toLocaleLowerCase()) entries.push({ source, target });
+  }
+  return entries;
+}
+
+const includesTerm = (text: string, term: string) => {
+  if (/^[\p{Script=Latin}\p{Number}\s_.+/#-]+$/u.test(term)) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    return new RegExp(`(?<![\\p{Letter}\\p{Number}])${escaped}(?![\\p{Letter}\\p{Number}])`, 'iu').test(text);
+  }
+  return text.toLocaleLowerCase().includes(term.toLocaleLowerCase());
+};
 
 export function assessTranslationQuality(
   source: string,
@@ -186,6 +226,40 @@ export function assessTranslationQuality(
   if (addedNumbers.length) {
     const severity = options.documentType && HIGH_PRECISION_TYPES.has(options.documentType) ? 'error' : 'warning';
     issues.push(issue('added_number', severity, '譯文加入原文沒有的數字、金額或百分比。', addedNumbers.slice(0, 5).join(', ')));
+  }
+
+  const semanticSource = normalizeSemanticSource(source);
+  if (NEGATION_SOURCE_PATTERN.test(semanticSource) && !NEGATION_TARGET_PATTERN.test(translation)) {
+    const severity = options.documentType && HIGH_PRECISION_TYPES.has(options.documentType) ? 'error' : 'warning';
+    issues.push(issue('lost_negation', severity, '譯文可能遺失否定、禁止或排除語意。'));
+  }
+  NEGATION_SOURCE_PATTERN.lastIndex = 0;
+  NEGATION_TARGET_PATTERN.lastIndex = 0;
+  if (CONDITION_SOURCE_PATTERN.test(source) && !CONDITION_TARGET_PATTERN.test(translation)) {
+    issues.push(issue('lost_condition', 'warning', '譯文可能遺失條件或例外關係。'));
+  }
+  CONDITION_SOURCE_PATTERN.lastIndex = 0;
+  CONDITION_TARGET_PATTERN.lastIndex = 0;
+
+  const sourceUnits = collectAllMatches(source, UNIT_PATTERN).map((value) => value.toLocaleLowerCase());
+  UNIT_PATTERN.lastIndex = 0;
+  const targetUnits = collectAllMatches(translation, UNIT_PATTERN).map((value) => value.toLocaleLowerCase());
+  UNIT_PATTERN.lastIndex = 0;
+  const missingUnits = missingValues(sourceUnits, targetUnits);
+  if (missingUnits.length) {
+    const severity = options.documentType && HIGH_PRECISION_TYPES.has(options.documentType) ? 'error' : 'warning';
+    issues.push(issue('missing_unit', severity, '譯文可能遺失量測單位。', missingUnits.slice(0, 5).join(', ')));
+  }
+
+  const missingTerms = parseGlossaryEntries(options.glossary)
+    .filter((entry) => includesTerm(source, entry.source) && !includesTerm(translation, entry.target));
+  if (missingTerms.length) {
+    issues.push(issue(
+      'missing_glossary_term',
+      'error',
+      '譯文未遵守指定術語。',
+      missingTerms.slice(0, 5).map((entry) => `${entry.source} → ${entry.target}`).join(', '),
+    ));
   }
 
   const sourceFenceCount = countMatches(source, /^```/gm);

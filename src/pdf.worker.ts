@@ -4,6 +4,7 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { uint8ArrayToBase64 } from './lib/text';
 import { assertPdfPageLimit } from './lib/file-limits';
 import { reportWarning } from './lib/diagnostics';
+import { cleanPdfPages, orderPdfPageText, type PdfTextItemLike } from './lib/pdf-layout';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -107,22 +108,21 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         if (cancelledTasks.has(requestId)) return;
         const startPage = index * chunkSize;
         const endPage = Math.min(startPage + chunkSize, pageCount) - 1;
-        let chunkRawText = '';
+        const pageTexts: string[] = [];
 
         try {
           for (let pageNumber = startPage + 1; pageNumber <= endPage + 1; pageNumber++) {
             if (cancelledTasks.has(requestId)) return;
             const page = await pdfjsDoc.getPage(pageNumber);
             const textContent = await page.getTextContent();
-            chunkRawText += textContent.items
-              .map((item) => ('str' in item ? item.str : ''))
-              .join(' ') + '\n';
+            pageTexts.push(orderPdfPageText(textContent.items as PdfTextItemLike[]));
             page.cleanup();
           }
         } catch {
           reportWarning('worker_raw_text_extraction_failed', { chunk: index + 1 });
         }
 
+        const chunkRawText = cleanPdfPages(pageTexts);
         let chunkBase64: string | undefined;
         if (chunkRawText.replace(/\s+/g, '').length <= 10) {
           const pageIndices = Array.from(

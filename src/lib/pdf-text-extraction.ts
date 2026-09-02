@@ -1,4 +1,5 @@
 import { assertPdfPageLimit } from './file-limits';
+import { cleanPdfPages, orderPdfPageText, type PdfTextItemLike } from './pdf-layout';
 
 export const extractPdfText = async (file: File, onProgress: (page: number, total: number, text: string) => void) => {
   const arrayBuffer = await file.arrayBuffer();
@@ -10,15 +11,16 @@ export const extractPdfText = async (file: File, onProgress: (page: number, tota
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   try {
     assertPdfPageLimit(pdf.numPages);
-    let fullText = '';
+    const pageTexts: string[] = [];
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
       const textContent = await page.getTextContent();
-      fullText += `${textContent.items.map((item: any) => item.str).join(' ')}\n\n`;
+      pageTexts.push(orderPdfPageText(textContent.items as PdfTextItemLike[]));
       page.cleanup();
+      const fullText = cleanPdfPages(pageTexts);
       onProgress(pageNumber, pdf.numPages, fullText);
     }
-    return fullText;
+    return cleanPdfPages(pageTexts);
   } finally {
     await pdf.destroy();
   }

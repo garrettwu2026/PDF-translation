@@ -10,3 +10,9 @@ test('tracks translation stages and terminal states', () => {
   const done = translationMachineReducer(reviewing, { type: 'TRANSITION', stage: 'completed' });
   assert.equal(isTranslationMachineActive(done.stage), false);
 });
+
+test('selective semantic review remains an active translation stage', () => {
+  const state = translationMachineReducer(initialTranslationMachineState, { type: 'TRANSITION', stage: 'semantic_review', message: '複審' });
+  assert.equal(state.statusMessage, '複審');
+  assert.equal(isTranslationMachineActive(state.stage), true);
+});

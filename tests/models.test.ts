@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateTokenCost, estimatePipelineCost, getModelCatalogStatus, getModelConfig, getTemperatureConfig } from '../src/lib/models.ts';
+import { calculateTokenCost, estimatePipelineCost, getModelCatalogStatus, getModelConfig, getQualityReviewModelId, getTemperatureConfig } from '../src/lib/models.ts';
 
 test('model lookup falls back to the default model', () => {
   assert.equal(getModelConfig('missing-model').id, 'gemini-3.7-flash');
@@ -11,6 +11,11 @@ test('sampling config omits unsupported GPT-5.6 temperatures', () => {
   assert.deepEqual(getTemperatureConfig(getModelConfig('gpt-5.6-luna'), 0.1), {});
   assert.deepEqual(getTemperatureConfig(getModelConfig('gpt-5.6-sol'), 0.2), {});
   assert.deepEqual(getTemperatureConfig(getModelConfig('gemini-3.7-flash'), 0.1), { temperature: 0.1 });
+});
+
+test('selective quality review stays with the provider and uses its strongest catalog model', () => {
+  assert.equal(getQualityReviewModelId('gemini-3.5-flash-lite'), 'gemini-3.1-pro-preview');
+  assert.equal(getQualityReviewModelId('gpt-5.6-terra'), 'gpt-5.6-sol');
 });
 
 test('token cost calculation uses per-million-token prices', () => {

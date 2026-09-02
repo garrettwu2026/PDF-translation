@@ -103,6 +103,48 @@ export function stripSegmentMarkers(text: string) {
   return text.replace(MARKER_PATTERN, '');
 }
 
+export function extractSegmentTranslations(translation: string, segments: SourceSegment[]) {
+  const translations = new Map<string, string>();
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    const markerIndex = translation.indexOf(segment.marker);
+    if (markerIndex < 0) continue;
+    const contentStart = markerIndex + segment.marker.length;
+    const nextMarkerIndex = segments
+      .slice(index + 1)
+      .map((item) => translation.indexOf(item.marker, contentStart))
+      .find((position) => position >= 0) ?? translation.length;
+    translations.set(segment.id, translation.slice(contentStart, nextMarkerIndex).trim());
+  }
+  return translations;
+}
+
+export function applySentenceRevisions(
+  translation: string,
+  segments: SourceSegment[],
+  revisions: Array<{ id: string; translation: string }>,
+) {
+  const revisionMap = new Map(revisions.map((revision) => [revision.id, revision.translation.trim()]));
+  let result = translation;
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const segment = segments[index];
+    const revision = revisionMap.get(segment.id);
+    if (!revision) continue;
+    const markerIndex = result.indexOf(segment.marker);
+    if (markerIndex < 0) continue;
+    const contentStart = markerIndex + segment.marker.length;
+    const nextMarkerIndex = segments
+      .slice(index + 1)
+      .map((item) => result.indexOf(item.marker, contentStart))
+      .find((position) => position >= 0) ?? result.length;
+    const current = result.slice(contentStart, nextMarkerIndex);
+    const leading = current.match(/^\s*/)?.[0] ?? '';
+    const trailing = current.match(/\s*$/)?.[0] ?? '';
+    result = `${result.slice(0, contentStart)}${leading}${revision}${trailing}${result.slice(nextMarkerIndex)}`;
+  }
+  return result;
+}
+
 export const SENTENCE_REPAIR_SCHEMA = {
   name: 'sentence_translation_repairs',
   schema: {

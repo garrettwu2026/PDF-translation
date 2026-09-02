@@ -11,7 +11,7 @@ import {
 import { splitMarkdownIntoTokenChunks } from './lib/text';
 import { MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
 import { buildDocumentAnalysisPrompt, DOCUMENT_ANALYSIS_SCHEMA, parseDocumentAnalysis } from './lib/document-analysis';
-import { calculateTokenCost, DEFAULT_MODEL_ID, estimatePipelineCost, getModelConfig, MODELS } from './lib/models';
+import { DEFAULT_MODEL_ID, estimatePipelineCost, getModelConfig, MODELS } from './lib/models';
 import { reportError, reportWarning } from './lib/diagnostics';
 import { generateContent, generateContentStream, type GenerateContentOptions, type GenerateStreamOptions } from './lib/ai-providers';
 import { abortableDelay, isAbortError, throwIfAborted } from './lib/abort';
@@ -89,6 +89,7 @@ export default function App() {
     cacheWriteInputTokens: actualCacheWriteInputTokens,
     outputTokens: actualOutputTokens,
     reasoningTokens: actualReasoningTokens,
+    actualCost,
     resetUsage,
     recordUsage,
   } = useTranslationUsage();
@@ -856,7 +857,7 @@ export default function App() {
           signal: translationController.signal,
           generate: generateContentWrapper,
           generateStream: generateContentStreamWrapper,
-          onUsage: (usage) => recordUsage(usage, selectedModel, translationBudgetUsd),
+          onUsage: (usage, billedModel) => recordUsage(usage, billedModel, translationBudgetUsd),
           onPreview: (preview) => setTranslatedText(fullTranslatedText + preview),
           onStage: (stage, message) => translationMachine.transition(stage, message),
           onWarning: reportWarning,
@@ -1147,8 +1148,6 @@ export default function App() {
     outputTokens: actualOutputTokens,
     reasoningTokens: actualReasoningTokens,
   };
-  const actualCost = calculateTokenCost(selectedModelData, actualUsage);
-
   return (
     <div className="app-shell min-h-screen bg-slate-950 text-slate-100 font-sans">
       <AppToast toast={toast} onClose={() => setToast(null)} />

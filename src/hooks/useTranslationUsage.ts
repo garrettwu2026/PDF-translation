@@ -10,21 +10,27 @@ const EMPTY_USAGE = {
   outputTokens: 0,
   reasoningTokens: 0,
 };
+const EMPTY_COST = { inputUsd: 0, outputUsd: 0, totalUsd: 0, totalTwd: 0 };
 
 export const useTranslationUsage = () => {
   const meterRef = useRef(new TranslationUsageMeter());
   const [usageTotals, setUsageTotals] = useState(EMPTY_USAGE);
+  const [actualCost, setActualCost] = useState(EMPTY_COST);
 
   const resetUsage = useCallback(() => {
     meterRef.current.reset();
     setUsageTotals(EMPTY_USAGE);
+    setActualCost(EMPTY_COST);
   }, []);
 
   const recordUsage = useCallback((usage: UsageMetadata | undefined, modelId: string, limitUsd: number) => {
-    const totals = meterRef.current.add(usage);
+    const model = getModelConfig(modelId);
+    const totals = meterRef.current.add(usage, model);
     setUsageTotals(totals);
-    return meterRef.current.enforce(getModelConfig(modelId), limitUsd);
+    const cost = meterRef.current.enforce(model, limitUsd);
+    setActualCost(cost);
+    return cost;
   }, []);
 
-  return { ...usageTotals, resetUsage, recordUsage };
+  return { ...usageTotals, actualCost, resetUsage, recordUsage };
 };

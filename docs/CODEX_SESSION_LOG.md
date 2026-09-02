@@ -236,3 +236,18 @@ Decisions and outcome:
 - Count genuinely new terminology and character memory entries instead of repeated model reports.
 - Add click, keyboard, and real drag-and-drop upload behavior plus modal focus trapping, Escape dismissal, semantic labels, and focus restoration.
 - Add regression coverage for checkpoint scheduling, adaptive proofreading, new-memory detection, drag-and-drop upload, and dialog accessibility.
+
+### Meaning fidelity, selective review, and PDF reading order
+
+User request:
+
+> Implement the five recommended translation-quality improvements.
+
+Decisions and outcome:
+
+- Add deterministic negation, condition, measurement-unit, and locked-glossary checks to the existing completeness gate.
+- Score sentence risk from deterministic findings, complex relations, precision content, length anomalies, and correction uncertainty.
+- Send only the highest-risk quarter, capped at eight sentences per chunk, to the strongest model from the same provider; accept only requested sentence IDs and replace only confirmed errors.
+- Account mixed translation/review usage using each model's real catalog price under the same user-defined budget.
+- Share coordinate-aware PDF ordering, repeated header/footer removal, page-number cleanup, and cross-page line repair across translation and converter extraction.
+- Expand the sanitized benchmark across general, novel, technical, academic, and business/legal cases plus PDF layout and selective-review tests.

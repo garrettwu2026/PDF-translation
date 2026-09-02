@@ -37,6 +37,7 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/document-analysis.ts`: one-request glossary, character, and style analysis
 - `src/lib/document-memory.ts`: whole-document, chapter, and recent-summary memory plus stable term merging
 - `src/lib/translation-quality.ts`: deterministic protected-content and Markdown integrity checks
+- `src/lib/translation-risk.ts`: sentence risk scoring and selective stronger-model semantic review
 - `src/lib/protected-content.ts`: reversible placeholders for code, URLs, email, math, link targets, and HTML
 - `src/lib/sentence-segments.ts`: stable sentence IDs, omission localization, and targeted repair application
 - `src/lib/translation-runner.ts`: per-chunk draft, correction, sentence repair, protected-content restore, and validation pipeline
@@ -49,6 +50,7 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/hooks/useDocumentExports.ts`: copy, Markdown, PDF, and EPUB export coordination
 - `src/lib/browser-exports.ts`: Markdown, EPUB, and safe print export helpers
 - `src/lib/pdf-text-extraction.ts`: converter-mode PDF text extraction
+- `src/lib/pdf-layout.ts`: coordinate-aware PDF reading order, repeated edge removal, and line repair
 - `src/components/MarkdownPreview.tsx`: lazily loaded Markdown renderer
 - `src/components/ModelSelectionPanel.tsx`: model selector, price card, and run limits
 - `src/components/ModelCatalogNotice.tsx`: official pricing links and scheduled review warning
@@ -118,11 +120,13 @@ npm start
 - Code blocks, inline code, link targets, URLs, email addresses, math, and HTML tags are replaced by reversible placeholders during model calls. Every placeholder must occur exactly once and remain in source order.
 - Users can choose automatic, novel, technical, academic, business/legal, or general translation rules.
 - Optional chapter consistency proofreading evaluates headings, document completion, or a six-chunk boundary, but only spends an AI request when terminology, character, quality, or document-mode signals indicate risk. It keeps the chunk-level result if review validation fails.
-- A corrected chunk must pass deterministic checks for headings, URLs, link targets, code, footnotes, fences, severe truncation/expansion, repeated paragraphs, source-language residue, and numeric fidelity. Missing or invented numbers block technical, academic, and business/legal documents.
+- A corrected chunk must pass deterministic checks for headings, URLs, link targets, code, footnotes, fences, severe truncation/expansion, repeated paragraphs, source-language residue, numeric fidelity, measurement units, negation, conditions, and locked glossary terms. Missing or invented numbers block technical, academic, and business/legal documents; locked glossary violations block every mode.
+- Sentence risk scoring selects at most the highest-risk 25% (maximum eight) for an independent semantic review. Review stays with the chosen provider, uses Gemini 3.1 Pro Preview or GPT-5.6 Sol, revises only confirmed errors, and is charged against the same run budget using the review model's actual price.
 - Automatic document classification persists the resolved mode in history. Legacy automatic-mode records are reanalyzed once when resumed.
 - Provider failures are classified as authentication, invalid request, rate limit, transient, or unknown. Only quality, rate-limit, and transient failures retry; Retry-After is honored when supplied.
 - Layered translation memory separates a global summary, up to 24 chapter summaries, the latest six developments, and the immediate prior source/translation context.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
+- Native PDF extraction uses item coordinates to order two-column pages, removes repeated page edges/page numbers when enough pages are available, and repairs soft/hyphenated line breaks across page boundaries before AI formatting or converter output.
 - Do not weaken EPUB sanitization or server request limits.
 - Avoid exposing raw API errors, secrets, or uploaded content in logs.
 - Client diagnostics must use `src/lib/diagnostics.ts`. Never log source text, translated text, prompts, provider bodies, or API keys.

@@ -52,6 +52,11 @@ export const PIPELINE_OUTPUT_MULTIPLIER = 2.5;
 export const getModelConfig = (modelId: string) =>
   MODELS.find((model) => model.id === modelId) ?? MODELS[0];
 
+export const getQualityReviewModelId = (modelId: string) => {
+  const model = getModelConfig(modelId);
+  return model.provider === 'google' ? 'gemini-3.1-pro-preview' : 'gpt-5.6-sol';
+};
+
 export const getTemperatureConfig = (model: ModelConfig, temperature: number) =>
   model.supportsCustomTemperature ? { temperature } : {};
 

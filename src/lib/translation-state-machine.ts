@@ -1,4 +1,4 @@
-export type TranslationStage = 'idle' | 'extracting' | 'analyzing' | 'translating' | 'correcting' | 'repairing' | 'chapter_review' | 'saving' | 'paused' | 'completed' | 'failed';
+export type TranslationStage = 'idle' | 'extracting' | 'analyzing' | 'translating' | 'correcting' | 'repairing' | 'semantic_review' | 'chapter_review' | 'saving' | 'paused' | 'completed' | 'failed';
 
 export type TranslationMachineState = { stage: TranslationStage; statusMessage: string; error?: string };
 export type TranslationMachineEvent =

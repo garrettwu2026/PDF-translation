@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   annotateTranslationSegments,
+  applySentenceRevisions,
   applySentenceRepairs,
+  extractSegmentTranslations,
   findMissingSegmentIds,
   inspectTranslationSegments,
   stripSegmentMarkers,
@@ -50,4 +52,13 @@ test('repairs a marker whose translated content is empty', () => {
   const repaired = applySentenceRepairs(empty, annotated.segments, [{ id: annotated.segments[0].id, translation: '一。' }]);
   assert.deepEqual(inspectTranslationSegments(repaired, annotated.segments).empty, []);
   assert.ok(repaired.includes(`${annotated.segments[0].marker}一。`));
+});
+
+test('extracts and selectively replaces one translated sentence without changing markers', () => {
+  const annotated = annotateTranslationSegments('One. Two.');
+  const translation = `${annotated.segments[0].marker}一。${annotated.segments[1].marker}錯誤。`;
+  assert.equal(extractSegmentTranslations(translation, annotated.segments).get(annotated.segments[1].id), '錯誤。');
+  const revised = applySentenceRevisions(translation, annotated.segments, [{ id: annotated.segments[1].id, translation: '二。' }]);
+  assert.equal(revised, `${annotated.segments[0].marker}一。${annotated.segments[1].marker}二。`);
+  assert.equal(inspectTranslationSegments(revised, annotated.segments).outOfOrder, false);
 });

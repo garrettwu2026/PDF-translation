@@ -53,3 +53,54 @@ test('chunk pipeline restores protected content and repairs only a missing sente
   assert.ok(result.translatedText.includes('`npm test`'));
   assert.ok(result.translatedText.includes('第一句。'));
 });
+
+test('chunk pipeline selectively sends risky meaning to the stronger review model', async () => {
+  const source = 'The supplier shall not disclose the trade secret.';
+  const annotated = annotateTranslationSegments(source);
+  const draft = `${annotated.segments[0].marker}供應商應揭露營業秘密。`;
+  const models: string[] = [];
+  let generatedCalls = 0;
+  const result = await translateChunkWithQuality({
+    sourceText: source,
+    model: 'gpt-5.6-luna',
+    chunkNumber: 1,
+    totalChunks: 1,
+    retryLimit: 2,
+    style: '正式',
+    glossary: '- trade secret: 商業機密',
+    characterMap: '無',
+    plotSummary: '',
+    previousSourceText: '',
+    previousTranslatedText: '',
+    customInstructions: '',
+    documentTypeInstruction: '法律文件',
+    documentType: 'business_legal',
+    signal: new AbortController().signal,
+    generateStream: async function* () { yield { text: draft }; },
+    generate: async ({ model }) => {
+      models.push(model);
+      generatedCalls++;
+      if (generatedCalls === 1) {
+        return { text: JSON.stringify({
+          correctedTranslation: draft,
+          newTerms: [],
+          newCharacters: [],
+          chunkSummary: '',
+          foundHallucinations: false,
+          missingContentDetected: false,
+          missingSentenceIds: [],
+        }) };
+      }
+      return { text: JSON.stringify({ revisions: [{
+        id: annotated.segments[0].id,
+        translation: '供應商不得揭露商業機密。',
+        reason: '修復否定與術語',
+      }] }) };
+    },
+    onUsage: () => undefined,
+    onPreview: () => undefined,
+    onStage: () => undefined,
+  });
+  assert.deepEqual(models, ['gpt-5.6-luna', 'gpt-5.6-sol']);
+  assert.equal(result.translatedText, '供應商不得揭露商業機密。');
+});

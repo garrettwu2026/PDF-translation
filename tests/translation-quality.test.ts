@@ -8,13 +8,18 @@ type BaselineCase = {
   source: string;
   translation: string;
   expectedCodes: TranslationQualityIssueCode[];
+  documentType?: 'novel' | 'technical' | 'academic' | 'business_legal' | 'general';
+  glossary?: string;
 };
 
 const cases = JSON.parse(readFileSync(new URL('./fixtures/translation-quality-baseline.json', import.meta.url), 'utf8')) as BaselineCase[];
 
 for (const baseline of cases) {
   test(`translation quality baseline: ${baseline.name}`, () => {
-    const report = assessTranslationQuality(baseline.source, baseline.translation);
+    const report = assessTranslationQuality(baseline.source, baseline.translation, {
+      documentType: baseline.documentType,
+      glossary: baseline.glossary,
+    });
     assert.deepEqual(report.issues.map((item) => item.code).sort(), [...baseline.expectedCodes].sort());
   });
 }
@@ -54,4 +59,20 @@ test('reports suspicious expansion, repeated paragraphs and untranslated residue
 
   const expanded = assessTranslationQuality('A sufficiently long source sentence. '.repeat(8), '額外內容。'.repeat(400));
   assert.ok(expanded.issues.some((item) => item.code === 'suspiciously_long'));
+});
+
+test('accepts preserved negation, conditions, units, and required terminology', () => {
+  const report = assessTranslationQuality(
+    'If the cache is not available, keep the limit at 80 °C.',
+    '如果快取無法使用，請將限制維持在 80 °C。',
+    { documentType: 'technical', glossary: '- cache: 快取' },
+  );
+  assert.equal(report.issues.some((item) => ['lost_negation', 'lost_condition', 'missing_unit', 'missing_glossary_term'].includes(item.code)), false);
+});
+
+test('does not match a short Latin glossary term inside another word', () => {
+  const report = assessTranslationQuality('She said the release is ready.', '她說版本已經準備好了。', {
+    glossary: '- AI: 人工智慧',
+  });
+  assert.equal(report.issues.some((item) => item.code === 'missing_glossary_term'), false);
 });

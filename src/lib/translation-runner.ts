@@ -3,10 +3,12 @@ import type { ContentResult, GenerateContentOptions, GenerateStreamOptions } fro
 import { protectContent, restoreProtectedContent, formatProtectedContentInstruction } from './protected-content.ts';
 import {
   annotateTranslationSegments,
+  applySentenceRevisions,
   applySentenceRepairs,
   buildSentenceRepairPrompt,
   findMissingSegmentIds,
   inspectTranslationSegments,
+  extractSegmentTranslations,
   parseSentenceRepairs,
   SENTENCE_REPAIR_SCHEMA,
   stripSegmentMarkers,
@@ -20,6 +22,13 @@ import {
 } from './translation-prompts.ts';
 import { assessTranslationQuality, formatQualityIssuesForPrompt } from './translation-quality.ts';
 import type { DetectedDocumentType } from './document-types.ts';
+import { getQualityReviewModelId } from './models.ts';
+import {
+  buildSemanticReviewPrompt,
+  parseSemanticReview,
+  selectRiskySentences,
+  SEMANTIC_REVIEW_SCHEMA,
+} from './translation-risk.ts';
 import {
   classifyProviderError,
   formatProviderErrorForUser,
@@ -52,9 +61,9 @@ type ChunkTranslationOptions = {
   signal: AbortSignal;
   generate: (options: GenerateContentOptions) => Promise<ContentResult>;
   generateStream: (options: GenerateStreamOptions) => AsyncGenerator<ContentResult>;
-  onUsage: (usage: NonNullable<ContentResult['usageMetadata']>) => void;
+  onUsage: (usage: NonNullable<ContentResult['usageMetadata']>, model: string) => void;
   onPreview: (text: string) => void;
-  onStage: (stage: 'translating' | 'correcting' | 'repairing', message: string) => void;
+  onStage: (stage: 'translating' | 'correcting' | 'repairing' | 'semantic_review', message: string) => void;
   onWarning?: (code: string, metadata?: Record<string, string | number | boolean>) => void;
 };
 
@@ -94,10 +103,13 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         throwIfAborted(options.signal);
         draft += chunk.text || '';
         options.onPreview(previewText(draft, protectedSource.entries));
-        if (chunk.usageMetadata) options.onUsage(chunk.usageMetadata);
+        if (chunk.usageMetadata) options.onUsage(chunk.usageMetadata, options.model);
       }
 
-      const draftQuality = assessTranslationQuality(annotatedSource.text, draft, { documentType: options.documentType });
+      const draftQuality = assessTranslationQuality(annotatedSource.text, draft, {
+        documentType: options.documentType,
+        glossary: options.glossary,
+      });
       options.onStage('correcting', `正在自我校對與更新術語 (第 ${options.chunkNumber}/${options.totalChunks} 部分)...`);
       const correctionResponse = await options.generate({
         model: options.model,
@@ -114,7 +126,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         jsonSchema: CORRECTION_SCHEMA,
         signal: options.signal,
       });
-      if (correctionResponse.usageMetadata) options.onUsage(correctionResponse.usageMetadata);
+      if (correctionResponse.usageMetadata) options.onUsage(correctionResponse.usageMetadata, options.model);
       const correction = parseCorrectionResult(correctionResponse.text || '{}');
       let corrected = correction.correctedTranslation || draft;
 
@@ -132,13 +144,13 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
           jsonSchema: SENTENCE_REPAIR_SCHEMA,
           signal: options.signal,
         });
-        if (repairResponse.usageMetadata) options.onUsage(repairResponse.usageMetadata);
+        if (repairResponse.usageMetadata) options.onUsage(repairResponse.usageMetadata, options.model);
         corrected = applySentenceRepairs(corrected, annotatedSource.segments, parseSentenceRepairs(repairResponse.text || '{}'));
       } else if (correction.missingContentDetected) {
         throw new TranslationQualityError('Model reported missing content without sentence IDs');
       }
 
-      const segmentInspection = inspectTranslationSegments(corrected, annotatedSource.segments);
+      let segmentInspection = inspectTranslationSegments(corrected, annotatedSource.segments);
       const invalidSegmentIds = [...new Set([
         ...segmentInspection.missing,
         ...segmentInspection.empty,
@@ -148,11 +160,56 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
       if (invalidSegmentIds.length || segmentInspection.outOfOrder) {
         throw new TranslationQualityError(`Invalid sentence markers: ${invalidSegmentIds.join(', ') || 'out of order'}`);
       }
+
+      const riskySentences = selectRiskySentences({
+        segments: annotatedSource.segments,
+        translations: extractSegmentTranslations(corrected, annotatedSource.segments),
+        glossary: options.glossary,
+        documentType: options.documentType,
+        correctionUncertain: correction.foundHallucinations || correction.missingContentDetected,
+      });
+      if (riskySentences.length) {
+        options.onStage('semantic_review', `正在複審 ${riskySentences.length} 個高風險句子 (第 ${options.chunkNumber}/${options.totalChunks} 部分)...`);
+        options.onWarning?.('translation_selective_semantic_review', { count: riskySentences.length, chunk: options.chunkNumber });
+        try {
+          const reviewModel = getQualityReviewModelId(options.model);
+          const semanticReview = await options.generate({
+            model: reviewModel,
+            promptText: buildSemanticReviewPrompt({
+              sentences: riskySentences,
+              glossary: options.glossary,
+              documentTypeInstruction: options.documentTypeInstruction,
+            }),
+            temperature: 0,
+            jsonSchema: SEMANTIC_REVIEW_SCHEMA,
+            signal: options.signal,
+          });
+          if (semanticReview.usageMetadata) options.onUsage(semanticReview.usageMetadata, reviewModel);
+          const allowedIds = new Set(riskySentences.map((sentence) => sentence.id));
+          corrected = applySentenceRevisions(
+            corrected,
+            annotatedSource.segments,
+            parseSemanticReview(semanticReview.text || '{}', allowedIds),
+          );
+          segmentInspection = inspectTranslationSegments(corrected, annotatedSource.segments);
+          if (segmentInspection.missing.length || segmentInspection.empty.length || segmentInspection.duplicates.length || segmentInspection.unknown.length || segmentInspection.outOfOrder) {
+            throw new TranslationQualityError('Semantic review changed sentence markers');
+          }
+        } catch (reviewError) {
+          if (isAbortError(reviewError) || reviewError instanceof Error && reviewError.name === 'TranslationBudgetExceededError') throw reviewError;
+          if (reviewError instanceof TranslationQualityError) throw reviewError;
+          options.onWarning?.('translation_selective_semantic_review_failed', { chunk: options.chunkNumber });
+        }
+      }
+
       const restored = restoreProtectedContent(stripSegmentMarkers(corrected), protectedSource.entries);
       if (restored.missing.length || restored.unknown.length || restored.duplicates.length || restored.outOfOrder) {
         throw new TranslationQualityError('Protected placeholders were changed, duplicated, removed, or reordered');
       }
-      const finalQuality = assessTranslationQuality(options.sourceText, restored.text, { documentType: options.documentType });
+      const finalQuality = assessTranslationQuality(options.sourceText, restored.text, {
+        documentType: options.documentType,
+        glossary: options.glossary,
+      });
       if (finalQuality.blocking) throw new TranslationQualityError('Translation failed deterministic completeness checks');
       options.onPreview(restored.text);
       return {

@@ -16,6 +16,43 @@
     "source": "This paragraph contains enough source material to represent a meaningful translation unit. It repeats important context so a nearly empty response is recognized as an omission rather than accepted as a concise translation.",
     "translation": "很短。",
     "expectedCodes": ["suspiciously_short"]
+  },
+  {
+    "name": "legal negation must survive",
+    "source": "The supplier shall not disclose confidential information.",
+    "translation": "供應商應揭露機密資訊。",
+    "documentType": "business_legal",
+    "expectedCodes": ["lost_negation"]
+  },
+  {
+    "name": "business condition must survive",
+    "source": "Unless payment is received, the order remains suspended.",
+    "translation": "訂單維持暫停狀態。",
+    "documentType": "business_legal",
+    "expectedCodes": ["lost_condition"]
+  },
+  {
+    "name": "technical glossary is mandatory",
+    "source": "The cache invalidation policy runs after deployment.",
+    "translation": "部署後會執行暫存清除規則。",
+    "documentType": "technical",
+    "glossary": "- cache invalidation policy: 快取失效策略",
+    "expectedCodes": ["missing_glossary_term"]
+  },
+  {
+    "name": "academic measurement unit is preserved",
+    "source": "The sample was heated to 80 °C.",
+    "translation": "樣本被加熱至 80。",
+    "documentType": "academic",
+    "expectedCodes": ["missing_unit"]
+  },
+  {
+    "name": "novel dialogue preserves negation and name glossary",
+    "source": "Alice whispered, \"I will never leave Rowan.\"",
+    "translation": "愛麗絲低聲說：「我永遠不會離開羅文。」",
+    "documentType": "novel",
+    "glossary": "- Alice: 愛麗絲\n- Rowan: 羅文",
+    "expectedCodes": []
   }
 ]
 
