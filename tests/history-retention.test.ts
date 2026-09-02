@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { HistoryRecord } from '../src/lib/db.ts';
-import { selectHistoryRecordsToKeep } from '../src/lib/db.ts';
+import { selectHistoryRecordsToKeep, shouldCheckpointTranslationProgress } from '../src/lib/db.ts';
 
 const record = (id: string, timestamp: number, size = 10): HistoryRecord => ({
   id,
@@ -30,4 +30,10 @@ test('history retention keeps the newest records within count and size limits', 
 test('history retention always keeps the newest record even when it exceeds the size limit', () => {
   const result = selectHistoryRecordsToKeep([record('old', 1, 10), record('new', 2, 1_000)], 25, 50);
   assert.deepEqual(result.keep.map((item) => item.id), ['new']);
+});
+
+test('translation progress checkpoints the first, every third, and final chunk', () => {
+  const checkpoints = Array.from({ length: 8 }, (_, index) => index + 1)
+    .filter((chunk) => shouldCheckpointTranslationProgress(chunk, 8));
+  assert.deepEqual(checkpoints, [1, 3, 6, 8]);
 });

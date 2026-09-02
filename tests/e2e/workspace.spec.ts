@@ -11,11 +11,22 @@ test('核心工作台可切換、設定限制並讀取 Markdown', async ({ page 
 
   await page.getByTestId('api-key-button').click();
   await expect(page.getByRole('heading', { name: 'API Key 設定' })).toBeVisible();
-  await page.getByRole('button', { name: '關閉 API Key 設定' }).click();
+  await expect(page.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('heading', { name: 'API Key 設定' })).toBeHidden();
+  await expect(page.getByTestId('api-key-button')).toBeFocused();
 
   await page.getByTestId('history-button').click();
   await expect(page.getByRole('heading', { name: '歷史紀錄' })).toBeVisible();
   await page.getByRole('button', { name: '關閉歷史紀錄' }).click();
+
+  const dropzone = page.getByRole('button', { name: '上傳 PDF 或 Markdown 文件' });
+  await dropzone.evaluate((element) => {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(new File(['# Drag and drop\n\nLocal browser test.'], 'dragged.md', { type: 'text/markdown' }));
+    element.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer }));
+  });
+  await expect(page.getByText('dragged.md')).toBeVisible();
 
   await page.getByTestId('tab-converter').click();
   await page.getByTestId('file-input').setInputFiles({

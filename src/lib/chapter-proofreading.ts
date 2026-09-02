@@ -27,6 +27,36 @@ export function shouldProofreadChapter(chunks: string[], index: number, chapterC
   return /^#{1,3}\s+/m.test(chunks[index + 1]);
 }
 
+export type ChapterProofreadingDecision = {
+  boundary: boolean;
+  shouldReview: boolean;
+  reasons: Array<'terminology' | 'characters' | 'quality' | 'high_risk_document'>;
+};
+
+export function decideChapterProofreading(input: {
+  chunks: string[];
+  index: number;
+  chapterChunkCount: number;
+  documentType: DetectedDocumentType;
+  newTermCount: number;
+  newCharacterCount: number;
+  qualityWarningCount: number;
+  maxChunks?: number;
+}): ChapterProofreadingDecision {
+  const boundary = shouldProofreadChapter(input.chunks, input.index, input.chapterChunkCount, input.maxChunks);
+  if (!boundary) return { boundary: false, shouldReview: false, reasons: [] };
+
+  const naturalBoundary = input.index >= input.chunks.length - 1 || /^#{1,3}\s+/m.test(input.chunks[input.index + 1]);
+  const reasons: ChapterProofreadingDecision['reasons'] = [];
+  if (input.newTermCount > 0) reasons.push('terminology');
+  if (input.newCharacterCount > 0) reasons.push('characters');
+  if (input.qualityWarningCount > 0) reasons.push('quality');
+  if (naturalBoundary && (input.documentType === 'novel' || input.documentType === 'business_legal')) {
+    reasons.push('high_risk_document');
+  }
+  return { boundary: true, shouldReview: reasons.length > 0, reasons };
+}
+
 export function buildChapterProofreadingPrompt(input: {
   sourceChapter: string;
   translatedChapter: string;

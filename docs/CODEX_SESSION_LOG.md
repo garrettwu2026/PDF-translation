@@ -221,3 +221,18 @@ Decisions and outcome:
 - Persist the effective automatic document type across history and reanalyze legacy automatic-mode resumes once.
 - Normalize provider errors into permanent and retryable categories, honor Retry-After, and use exponential backoff with jitter for transient failures.
 - Add expansion, duplicate-paragraph, source-language-residue, and bidirectional numeric checks; numeric discrepancies block precision-sensitive document modes.
+
+### Maintenance, cost, and UX optimization
+
+User request:
+
+> Introduce maintenance, cost, and UX optimizations.
+
+Decisions and outcome:
+
+- Extract document export coordination from `App.tsx` and introduce reusable upload and accessible-dialog components.
+- Reduce IndexedDB write amplification by checkpointing the first chunk, every third chunk, and terminal states; skip repeated retention scans and history reloads on intermediate checkpoints.
+- Spend chapter-proofreading requests only at a valid boundary with terminology, character, quality, or document-mode risk signals.
+- Count genuinely new terminology and character memory entries instead of repeated model reports.
+- Add click, keyboard, and real drag-and-drop upload behavior plus modal focus trapping, Escape dismissal, semantic labels, and focus restoration.
+- Add regression coverage for checkpoint scheduling, adaptive proofreading, new-memory detection, drag-and-drop upload, and dialog accessibility.

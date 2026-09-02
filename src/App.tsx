@@ -1,6 +1,13 @@
 import React, { lazy, Suspense, useState, useRef, useEffect } from 'react';
-import { Upload, FileText, Play, Download, Loader2, AlertCircle, CheckCircle2, FileUp, Key, Copy, Book, X, ExternalLink, History, Image as ImageIcon, Info } from 'lucide-react';
-import { saveHistory, getAllHistory, deleteHistory, HistoryRecord } from './lib/db';
+import { FileText, Play, Download, Loader2, AlertCircle, CheckCircle2, Key, Copy, Book, X, ExternalLink, History, Image as ImageIcon, Info } from 'lucide-react';
+import {
+  saveHistory,
+  getAllHistory,
+  deleteHistory,
+  HistoryRecord,
+  HistoryStorageError,
+  shouldCheckpointTranslationProgress,
+} from './lib/db';
 import { splitMarkdownIntoTokenChunks } from './lib/text';
 import { MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
 import { buildDocumentAnalysisPrompt, DOCUMENT_ANALYSIS_SCHEMA, parseDocumentAnalysis } from './lib/document-analysis';
@@ -32,15 +39,17 @@ import InfoModal from './components/InfoModal';
 import ModelSelectionPanel from './components/ModelSelectionPanel';
 import TranslationCostSummary from './components/TranslationCostSummary';
 import { useTranslationUsage } from './hooks/useTranslationUsage';
-import { downloadBlob, downloadMarkdown, printElementToPdf, requestEpub } from './lib/browser-exports';
+import { downloadBlob, requestEpub } from './lib/browser-exports';
 import { extractPdfText } from './lib/pdf-text-extraction';
 import {
   createLayeredDocumentMemory,
   formatLayeredDocumentMemory,
+  getNewKnowledgeLines,
   mergeKnowledgeLines,
   updateLayeredDocumentMemory,
 } from './lib/document-memory';
 import TranslationQualitySettings from './components/TranslationQualitySettings';
+import DocumentUploadDropzone from './components/DocumentUploadDropzone';
 import {
   getDocumentTypeInstruction,
   normalizeDetectedDocumentType,
@@ -55,10 +64,11 @@ import {
   buildChapterProofreadingPrompt,
   CHAPTER_PROOFREADING_SCHEMA,
   parseChapterProofreadingResult,
-  shouldProofreadChapter,
+  decideChapterProofreading,
 } from './lib/chapter-proofreading';
 import { protectContent, restoreProtectedContent } from './lib/protected-content';
 import { assessTranslationQuality } from './lib/translation-quality';
+import { useDocumentExports } from './hooks/useDocumentExports';
 
 const MarkdownPreview = lazy(() => import('./components/MarkdownPreview'));
 const markdownFallback = <div className="text-sm text-slate-500">正在載入預覽...</div>;
@@ -114,11 +124,8 @@ export default function App() {
   const [authorName, setAuthorName] = useState('');
   const [currentFileId, setCurrentFileId] = useState<string | null>(null);
   
-  // Action states
-  const [isCopying, setIsCopying] = useState(false);
-  const [isDownloadingEpub, setIsDownloadingEpub] = useState(false);
-  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historyStorageWarningShownRef = useRef(false);
 
   useEffect(() => {
     setIsIframe(window !== window.parent);
@@ -200,6 +207,25 @@ export default function App() {
     setToast({ id: Date.now(), message, type });
     toastTimeoutRef.current = setTimeout(() => setToast(null), 5000);
   };
+  const {
+    isCopying,
+    isDownloadingEpub,
+    isDownloadingPdf,
+    copyText: handleCopyText,
+    downloadEpub,
+    downloadMarkdownFile: handleDownloadMarkdown,
+    downloadPdf,
+  } = useDocumentExports({
+    activeTab,
+    file,
+    customTitle,
+    authorName,
+    coverImage,
+    translatedText,
+    extractedText,
+    isIframe,
+    showToast,
+  });
   const [error, setError] = useState<string | null>(null);
   const [manualApiKey, setManualApiKey] = useState(() =>
     readStoredKey(SESSION_STORAGE_KEY_NAME, LOCAL_STORAGE_KEY_NAME));
@@ -215,7 +241,6 @@ export default function App() {
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [estimatedRemainingTime, setEstimatedRemainingTime] = useState<number | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfWorkerRef = useRef<Worker | null>(null);
   const tokenWorkerTaskRef = useRef<string | null>(null);
   const extractionWorkerTaskRef = useRef<string | null>(null);
@@ -296,10 +321,7 @@ export default function App() {
   const generateContentStreamWrapper = (options: GenerateStreamOptions) =>
     generateContentStream({ ...options, signal: options.signal ?? translationAbortControllerRef.current?.signal }, providerCredentials());
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (!selectedFile) return;
-
+  const handleFileUpload = (selectedFile: File) => {
     if (isTranslating) {
       translationCancelledRef.current = true;
       translationAbortControllerRef.current?.abort();
@@ -313,7 +335,6 @@ export default function App() {
       isMd = upload.kind === 'markdown';
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '檔案格式或大小不符合限制。');
-      e.target.value = '';
       return;
     }
 
@@ -562,6 +583,7 @@ export default function App() {
         currentGlossary: string,
         currentCharacters: string,
         currentPlotSummary: string,
+        pruneHistory = true,
       ) => {
         const record: HistoryRecord = {
           id: fileId,
@@ -584,10 +606,16 @@ export default function App() {
           chapterProofreading,
         };
         try {
-          await saveHistory(record);
-          void loadHistory();
+          await saveHistory(record, { prune: pruneHistory });
+          if (status === 'completed' || pruneHistory) {
+            void loadHistory();
+          }
         } catch (historyError) {
           reportWarning('translation_progress_save_failed');
+          if (historyError instanceof HistoryStorageError && !historyStorageWarningShownRef.current) {
+            historyStorageWarningShownRef.current = true;
+            showToast(historyError.message, 'error');
+          }
         }
       };
 
@@ -801,6 +829,9 @@ export default function App() {
       let chapterSourceChunks: string[] = [];
       let chapterTranslatedChunks: string[] = [];
       let chapterStartOffset = fullTranslatedText.length;
+      let chapterNewTermCount = 0;
+      let chapterNewCharacterCount = 0;
+      let chapterQualityWarningCount = 0;
 
       for (let i = startChunk; i < translationChunksCount; i++) {
         throwIfAborted(translationController.signal);
@@ -831,14 +862,16 @@ export default function App() {
           onWarning: reportWarning,
         });
         let currentChunkTranslated = result.translatedText;
+        const addedTerms = getNewKnowledgeLines(dynamicGlossary, result.newTerms);
+        const addedCharacters = getNewKnowledgeLines(dynamicCharacterMap, result.newCharacters);
 
-        if (result.newTerms.length > 0) {
-          dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, result.newTerms);
+        if (addedTerms.length > 0) {
+          dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, addedTerms);
           setGlossary(dynamicGlossary);
           latestGlossary = dynamicGlossary;
         }
-        if (result.newCharacters.length > 0) {
-          dynamicCharacterMap = mergeKnowledgeLines(dynamicCharacterMap, result.newCharacters);
+        if (addedCharacters.length > 0) {
+          dynamicCharacterMap = mergeKnowledgeLines(dynamicCharacterMap, addedCharacters);
           setCharacterMap(dynamicCharacterMap);
           latestCharacterMap = dynamicCharacterMap;
         }
@@ -850,10 +883,26 @@ export default function App() {
         }
 
         fullTranslatedText += currentChunkTranslated + '\n\n';
-        chapterSourceChunks.push(textChunks[i]);
-        chapterTranslatedChunks.push(currentChunkTranslated);
+        if (chapterProofreading) {
+          chapterSourceChunks.push(textChunks[i]);
+          chapterTranslatedChunks.push(currentChunkTranslated);
+          chapterNewTermCount += addedTerms.length;
+          chapterNewCharacterCount += addedCharacters.length;
+          const chunkQuality = assessTranslationQuality(textChunks[i], currentChunkTranslated, { documentType: effectiveDocumentType });
+          chapterQualityWarningCount += chunkQuality.issues.filter((issue) => issue.severity === 'warning').length;
+        }
 
-        if (chapterProofreading && shouldProofreadChapter(textChunks, i, chapterSourceChunks.length)) {
+        const chapterDecision = chapterProofreading ? decideChapterProofreading({
+          chunks: textChunks,
+          index: i,
+          chapterChunkCount: chapterSourceChunks.length,
+          documentType: effectiveDocumentType,
+          newTermCount: chapterNewTermCount,
+          newCharacterCount: chapterNewCharacterCount,
+          qualityWarningCount: chapterQualityWarningCount,
+        }) : null;
+
+        if (chapterDecision?.shouldReview) {
           translationMachine.transition('chapter_review', `正在進行章節一致性校稿 (至第 ${i + 1}/${translationChunksCount} 部分)...`);
           const sourceChapter = chapterSourceChunks.join('\n\n');
           const translatedChapter = chapterTranslatedChunks.join('\n\n');
@@ -891,9 +940,15 @@ export default function App() {
             if (reviewError instanceof TranslationBudgetExceededError || isAbortError(reviewError)) throw reviewError;
             reportWarning('chapter_proofreading_failed', { chunk: i + 1 });
           }
+        }
+        if (chapterDecision?.boundary) {
+          if (!chapterDecision.shouldReview) reportWarning('chapter_proofreading_skipped_low_risk', { chunk: i + 1 });
           chapterSourceChunks = [];
           chapterTranslatedChunks = [];
           chapterStartOffset = fullTranslatedText.length;
+          chapterNewTermCount = 0;
+          chapterNewCharacterCount = 0;
+          chapterQualityWarningCount = 0;
         }
 
         latestTranslatedText = fullTranslatedText;
@@ -902,17 +957,20 @@ export default function App() {
         previousSourceText = textChunks[i].slice(-1000);
         
         // Save progress to IndexedDB
-        await saveCurrentState(
-          'translating',
-          i + 1,
-          translationChunksCount,
-          fullMarkdown,
-          fullTranslatedText,
-          detectedStyle,
-          dynamicGlossary,
-          dynamicCharacterMap,
-          dynamicPlotSummary,
-        );
+        if (shouldCheckpointTranslationProgress(i + 1, translationChunksCount)) {
+          await saveCurrentState(
+            'translating',
+            i + 1,
+            translationChunksCount,
+            fullMarkdown,
+            fullTranslatedText,
+            detectedStyle,
+            dynamicGlossary,
+            dynamicCharacterMap,
+            dynamicPlotSummary,
+            i === 0,
+          );
+        }
         
         // Estimation update
         const now = Date.now();
@@ -1024,82 +1082,6 @@ export default function App() {
     }
   }, [pendingDownload, isTranslating, translatedText]);
 
-  const downloadPdf = async () => {
-    if (isIframe) {
-      showToast("在內嵌模式下可能無法下載檔案，請在新分頁開啟以獲得完整功能。", 'error');
-      return;
-    }
-    
-    setIsDownloadingPdf(true);
-    try {
-      const element = document.getElementById('translation-result-content');
-      if (!element) throw new Error("找不到內容元素");
-
-      const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
-      const defaultTitle = activeTab === 'translate' 
-        ? `${baseName}_翻譯`
-        : baseName;
-
-      printElementToPdf(element, defaultTitle);
-
-      showToast('請在列印對話框中選擇「另存為 PDF」', 'success');
-    } catch (err: any) {
-      reportError('pdf_export_failed');
-      showToast(`生成 PDF 失敗: ${err.message}`, 'error');
-    } finally {
-      setIsDownloadingPdf(false);
-    }
-  };
-
-  const handleDownloadMarkdown = () => {
-    const text = activeTab === 'translate' ? translatedText : extractedText;
-    if (!text) return;
-    
-    const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
-    const defaultTitle = activeTab === 'translate' 
-      ? `${baseName}_翻譯`
-      : baseName;
-    downloadMarkdown(text, `${defaultTitle}.md`);
-    showToast('已下載 Markdown 檔案', 'success');
-  };
-
-  const handleCopyText = async () => {
-    const textToCopy = activeTab === 'translate' ? translatedText : extractedText;
-    if (!textToCopy) return;
-    if (isIframe) {
-      showToast("在內嵌模式下可能無法複製，請在新分頁開啟以獲得完整功能。", 'error');
-      return;
-    }
-    
-    setIsCopying(true);
-    // 讓 React 有時間渲染 loading 狀態
-    await new Promise(resolve => setTimeout(resolve, 50));
-    
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(textToCopy);
-      } else {
-        // Fallback for iframe environments
-        const textArea = document.createElement("textarea");
-        textArea.value = textToCopy;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        textArea.style.top = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        document.execCommand('copy');
-        textArea.remove();
-      }
-      showToast("已複製全文到剪貼簿！", 'success');
-    } catch (err) {
-      reportError('clipboard_copy_failed');
-      showToast("複製失敗，請手動選取複製。", 'error');
-    } finally {
-      setIsCopying(false);
-    }
-  };
-
   const handlePdfToEpub = async () => {
     if (!file) return;
     if (isIframe) {
@@ -1147,41 +1129,6 @@ export default function App() {
     } finally {
       setIsExtracting(false);
       setStatusMessage('');
-    }
-  };
-
-  const downloadEpub = async (textToUse?: string) => {
-    if (isIframe) {
-      showToast("在內嵌模式下可能無法下載檔案，請在新分頁開啟以獲得完整功能。", 'error');
-      return;
-    }
-    const text = textToUse || (activeTab === 'translate' ? translatedText : extractedText);
-    if (!text) return;
-    
-    setIsDownloadingEpub(true);
-    // 讓 React 有時間渲染 loading 狀態
-    await new Promise(resolve => setTimeout(resolve, 50));
-    
-    try {
-      const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
-      const defaultTitle = activeTab === 'translate' 
-        ? `${baseName}_翻譯`
-        : baseName;
-
-      const blob = await requestEpub({
-        title: defaultTitle,
-        markdown: text,
-        author: authorName || undefined,
-        cover: coverImage || undefined,
-      });
-      downloadBlob(blob, `${defaultTitle}.epub`);
-      
-      showToast('EPUB 下載成功！', 'success');
-    } catch (err) {
-      reportError('epub_download_failed');
-      showToast(`產生 EPUB 失敗，請確定您的網路連線正常。(${err instanceof Error ? err.message : String(err)})`, 'error');
-    } finally {
-      setIsDownloadingEpub(false);
     }
   };
 
@@ -1325,37 +1272,7 @@ export default function App() {
                 </div>
               </div>
               
-              <div 
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200 ${
-                  file ? 'border-blue-500/50 bg-blue-900/10' : 'border-slate-700 hover:border-blue-500 hover:bg-slate-800/50'
-                }`}
-              >
-                <input 
-                  type="file" 
-                  data-testid="file-input"
-                  ref={fileInputRef} 
-                  onChange={handleFileUpload} 
-                  accept="application/pdf,.md" 
-                  className="hidden" 
-                />
-                
-                {file ? (
-                  <div className="flex flex-col items-center">
-                    <FileText className="w-10 h-10 text-blue-400 mb-3 drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]" />
-                    <p className="font-medium text-slate-200 truncate max-w-full px-4">{file.name}</p>
-                    <p className="text-sm text-slate-500 mt-1">
-                      {(file.size / 1024 / 1024).toFixed(2)} MB {totalPages > 0 && `· 共 ${totalPages} 頁`}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center">
-                    <FileUp className="w-10 h-10 text-slate-500 mb-3" />
-                    <p className="font-medium text-slate-300">點擊或拖曳上傳 PDF</p>
-                    <p className="text-sm text-slate-500 mt-1">PDF 最大 50 MB／3,600 頁</p>
-                  </div>
-                )}
-              </div>
+              <DocumentUploadDropzone file={file} totalPages={totalPages} onFile={handleFileUpload} />
 
               {activeTab === 'translate' && (
                 <div className="mt-4 space-y-4">

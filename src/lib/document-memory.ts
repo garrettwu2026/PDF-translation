@@ -88,17 +88,24 @@ const knowledgeKey = (line: string) => line
   .trim()
   .toLocaleLowerCase();
 
-/** Keeps the first accepted translation for a term/character and adds only new keys. */
-export function mergeKnowledgeLines(current: string, additions: string[]): string {
+export function getNewKnowledgeLines(current: string, additions: string[]): string[] {
   const base = current.trim() && current.trim() !== '無' ? current.trim().split('\n').filter(Boolean) : [];
   const seen = new Set(base.map(knowledgeKey));
+  const newLines: string[] = [];
   for (const addition of additions.map((value) => value.trim()).filter(Boolean)) {
     const key = knowledgeKey(addition);
     if (key && !seen.has(key)) {
       seen.add(key);
-      base.push(addition);
+      newLines.push(addition);
     }
   }
+  return newLines;
+}
+
+/** Keeps the first accepted translation for a term/character and adds only new keys. */
+export function mergeKnowledgeLines(current: string, additions: string[]): string {
+  const base = current.trim() && current.trim() !== '無' ? current.trim().split('\n').filter(Boolean) : [];
+  base.push(...getNewKnowledgeLines(current, additions));
   return base.length ? base.join('\n') : '無';
 }
 

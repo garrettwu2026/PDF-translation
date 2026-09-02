@@ -24,7 +24,32 @@ const STORE_NAME = 'history';
 const DB_VERSION = 1;
 export const HISTORY_MAX_RECORDS = 25;
 export const HISTORY_MAX_CHARACTERS = 12_000_000;
+export const HISTORY_CHECKPOINT_INTERVAL = 3;
 let databasePromise: Promise<IDBDatabase> | null = null;
+
+export class HistoryStorageError extends Error {
+  code: 'quota' | 'blocked' | 'unknown';
+
+  constructor(code: HistoryStorageError['code'], message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = 'HistoryStorageError';
+    this.code = code;
+  }
+}
+
+export const shouldCheckpointTranslationProgress = (
+  currentChunk: number,
+  totalChunks: number,
+  interval = HISTORY_CHECKPOINT_INTERVAL,
+) => currentChunk === 1 || currentChunk >= totalChunks || currentChunk % Math.max(1, interval) === 0;
+
+const normalizeStorageError = (error: unknown) => {
+  if (error instanceof HistoryStorageError) return error;
+  if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+    return new HistoryStorageError('quota', '瀏覽器儲存空間不足，請下載目前譯文並刪除不需要的歷史紀錄。', error);
+  }
+  return new HistoryStorageError('unknown', '無法儲存翻譯歷史紀錄。', error);
+};
 
 export const estimateHistoryRecordCharacters = (record: HistoryRecord) =>
   record.title.length
@@ -67,7 +92,7 @@ export const initDB = (): Promise<IDBDatabase> => {
     };
     request.onblocked = () => {
       databasePromise = null;
-      reject(new Error('Translation history database is blocked by another tab'));
+      reject(new HistoryStorageError('blocked', '另一個分頁正在使用翻譯歷史，請關閉其他分頁後重試。'));
     };
     request.onsuccess = () => {
       const database = request.result;
@@ -96,19 +121,28 @@ const waitForTransaction = (transaction: IDBTransaction): Promise<void> =>
     transaction.onabort = () => reject(transaction.error ?? new Error('Database transaction aborted'));
   });
 
-export const saveHistory = async (record: HistoryRecord): Promise<void> => {
-  const db = await initDB();
-  const transaction = db.transaction(STORE_NAME, 'readwrite');
-  const store = transaction.objectStore(STORE_NAME);
-  const request = store.getAll();
-  request.onsuccess = () => {
-    const existing = (request.result as HistoryRecord[]).filter((item) => item.id !== record.id);
-    const { deleteIds } = selectHistoryRecordsToKeep([...existing, record]);
-    for (const id of deleteIds) store.delete(id);
-    store.put(record);
-  };
-  request.onerror = () => transaction.abort();
-  await waitForTransaction(transaction);
+export const saveHistory = async (record: HistoryRecord, options: { prune?: boolean } = {}): Promise<void> => {
+  try {
+    const db = await initDB();
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    if (options.prune === false) {
+      store.put(record);
+      await waitForTransaction(transaction);
+      return;
+    }
+    const request = store.getAll();
+    request.onsuccess = () => {
+      const existing = (request.result as HistoryRecord[]).filter((item) => item.id !== record.id);
+      const { deleteIds } = selectHistoryRecordsToKeep([...existing, record]);
+      for (const id of deleteIds) store.delete(id);
+      store.put(record);
+    };
+    request.onerror = () => transaction.abort();
+    await waitForTransaction(transaction);
+  } catch (error) {
+    throw normalizeStorageError(error);
+  }
 };
 
 export const getHistory = async (id: string): Promise<HistoryRecord | undefined> => {

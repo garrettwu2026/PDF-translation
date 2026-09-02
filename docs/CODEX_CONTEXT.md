@@ -46,12 +46,15 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/structured-output.ts`: shared Gemini/OpenAI JSON Schema request configuration
 - `src/lib/translation-budget.ts`: token usage accounting, cost ceilings, and retry bounds
 - `src/hooks/useTranslationUsage.ts`: translation-run usage state
+- `src/hooks/useDocumentExports.ts`: copy, Markdown, PDF, and EPUB export coordination
 - `src/lib/browser-exports.ts`: Markdown, EPUB, and safe print export helpers
 - `src/lib/pdf-text-extraction.ts`: converter-mode PDF text extraction
 - `src/components/MarkdownPreview.tsx`: lazily loaded Markdown renderer
 - `src/components/ModelSelectionPanel.tsx`: model selector, price card, and run limits
 - `src/components/ModelCatalogNotice.tsx`: official pricing links and scheduled review warning
 - `src/components/TranslationCostSummary.tsx`: estimated and provider-reported actual cost UI
+- `src/components/AccessibleDialog.tsx`: shared modal semantics, focus trap, Escape handling, and focus restoration
+- `src/components/DocumentUploadDropzone.tsx`: click, keyboard, and drag-and-drop document selection
 - `server.ts`: Express/Vite server and health endpoint
 - `server/epub.ts`: EPUB request validation, sanitization, and generation
 - `server/rate-limit.ts`: bounded fixed-window request limiter with stale-client pruning
@@ -103,7 +106,7 @@ npm start
 - PDF worker messages are request-scoped and use acknowledgement backpressure. Preserve cancellation and stale-response guards when changing extraction or token counting.
 - Translation requests receive an `AbortSignal`; keep provider calls, retry delays, and worker cancellation connected to the same stop action.
 - The default run budget is USD 5 and the retry ceiling is user-adjustable from 1–6. A budget stop must preserve resumable history.
-- Browser history is automatically retained to the newest 25 records within an approximate 12-million-character capacity.
+- Browser history is automatically retained to the newest 25 records within an approximate 12-million-character capacity. In-progress translations checkpoint after the first chunk, every third chunk, and at completion/stop; retention scans are reserved for pruning checkpoints.
 - Keep model IDs, provider mapping, and displayed prices centralized in `src/lib/models.ts`; do not duplicate the catalog in UI components.
 - Respect model capability flags in `src/lib/models.ts`. GPT-5.6 currently requires the provider-default temperature, so OpenAI requests must omit custom `temperature` values.
 - Actual cost must use normalized provider usage: cached input is discounted; Gemini thinking tokens are added to billable output; OpenAI completion tokens already include reasoning and must not be added twice.
@@ -114,7 +117,7 @@ npm start
 - Translation source is tagged with stable sentence IDs; missing or empty segments trigger targeted repair, while duplicate, unknown, or reordered IDs fail validation.
 - Code blocks, inline code, link targets, URLs, email addresses, math, and HTML tags are replaced by reversible placeholders during model calls. Every placeholder must occur exactly once and remain in source order.
 - Users can choose automatic, novel, technical, academic, business/legal, or general translation rules.
-- Optional chapter consistency proofreading runs at headings, the document end, or after six chunks, and keeps the chunk-level result if review validation fails.
+- Optional chapter consistency proofreading evaluates headings, document completion, or a six-chunk boundary, but only spends an AI request when terminology, character, quality, or document-mode signals indicate risk. It keeps the chunk-level result if review validation fails.
 - A corrected chunk must pass deterministic checks for headings, URLs, link targets, code, footnotes, fences, severe truncation/expansion, repeated paragraphs, source-language residue, and numeric fidelity. Missing or invented numbers block technical, academic, and business/legal documents.
 - Automatic document classification persists the resolved mode in history. Legacy automatic-mode records are reanalyzed once when resumed.
 - Provider failures are classified as authentication, invalid request, rate limit, transient, or unknown. Only quality, rate-limit, and transient failures retry; Retry-After is honored when supplied.

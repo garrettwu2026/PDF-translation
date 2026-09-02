@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   createLayeredDocumentMemory,
   formatLayeredDocumentMemory,
+  getNewKnowledgeLines,
   mergeKnowledgeLines,
   updateLayeredDocumentMemory,
 } from '../src/lib/document-memory.ts';
@@ -23,5 +24,9 @@ test('knowledge merge preserves an accepted term and removes duplicate additions
     mergeKnowledgeLines('- [API]: 應用程式介面', ['- [API]: API', '- [SDK]: 軟體開發套件']),
     '- [API]: 應用程式介面\n- [SDK]: 軟體開發套件',
   );
+});
+
+test('new knowledge detection only counts genuinely new keys', () => {
+  assert.deepEqual(getNewKnowledgeLines('API：介面', ['API：接口', 'SDK：開發套件', 'SDK：工具']), ['SDK：開發套件']);
 });
 

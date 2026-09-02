@@ -41,7 +41,7 @@ export default function TranslationQualitySettings({
         />
         <span>
           <span className="block text-sm font-medium text-slate-300">章節一致性校稿</span>
-          <span className="block mt-1 text-xs text-slate-500">每章或最多六個分段做一次跨段校稿；品質較穩定，但會增加模型用量。</span>
+          <span className="block mt-1 text-xs text-slate-500">在章節邊界依術語、角色與品質風險決定是否校稿，兼顧一致性並避免不必要用量。</span>
         </span>
       </label>
     </div>

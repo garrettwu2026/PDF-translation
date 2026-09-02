@@ -134,3 +134,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - Added deterministic excessive-expansion, repeated-paragraph, source-language-residue, missing-number, and invented-number checks with stricter technical, academic, and business/legal handling.
 - Expanded the unit suite from 56 to 66 tests.
 - Validation: strict TypeScript, all 66 unit tests, and production build passed.
+
+## 2026-09-02 — Maintenance, cost, and UX optimization
+
+- Extracted document exports into `useDocumentExports` and added reusable upload/dropzone and accessible-dialog components.
+- Reduced translation-history writes by roughly two thirds during ordinary runs and avoided full retention/history reads on intermediate checkpoints.
+- Added quota/blocked IndexedDB error classification with a single user-facing warning while preserving safe terminal saves.
+- Made chapter proofreading risk-adaptive so quiet general-document boundaries skip an extra AI request while terminology, character, quality, novel, and business/legal risks still trigger review.
+- Changed chapter risk accounting to use only genuinely new document-memory entries.
+- Added native drag-and-drop, keyboard upload activation, focus trapping, Escape dismissal, semantic labels, and focus restoration.
+- Expanded the unit suite from 66 to 69 tests and extended browser E2E coverage for drag-and-drop and modal accessibility.
