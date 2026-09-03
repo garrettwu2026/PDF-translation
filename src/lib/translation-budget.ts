@@ -1,10 +1,36 @@
 import type { UsageMetadata } from './ai-providers';
 import { calculateTokenCost, type ModelConfig, USD_TO_TWD } from './models.ts';
+import { estimateTextTokens } from './text.ts';
 
 export const DEFAULT_TRANSLATION_BUDGET_USD = 5;
 export const DEFAULT_TRANSLATION_RETRY_LIMIT = 3;
 export const MIN_TRANSLATION_RETRY_LIMIT = 1;
 export const MAX_TRANSLATION_RETRY_LIMIT = 6;
+export const DEFAULT_REQUEST_MAX_OUTPUT_TOKENS = 4_096;
+
+// Leave room for Chinese expansion, sentence markers and structured metadata.
+export const estimateTranslationOutputLimit = (source: string) => {
+  const estimate = Math.max(DEFAULT_REQUEST_MAX_OUTPUT_TOKENS, estimateTextTokens(source) * 3 + 2_048);
+  if (estimate > 32_768) {
+    throw new Error('單段內容太長，請開啟分段翻譯；若已開啟，請先拆分過長的表格或程式碼區塊。');
+  }
+  return Math.ceil(estimate);
+};
+
+export type TranslationUsageSnapshot = {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  inputUsd: number;
+  outputUsd: number;
+};
+
+export type RequestBudgetEstimate = {
+  inputTokens: number;
+  outputTokens: number;
+};
 
 export class TranslationBudgetExceededError extends Error {
   readonly spentUsd: number;
@@ -18,6 +44,45 @@ export class TranslationBudgetExceededError extends Error {
   }
 }
 
+export class TranslationBudgetReservationError extends TranslationBudgetExceededError {
+  readonly currentUsd: number;
+  readonly reservedUsd: number;
+
+  constructor(currentUsd: number, reservedUsd: number, limitUsd: number) {
+    super(currentUsd + reservedUsd, limitUsd);
+    this.name = 'TranslationBudgetReservationError';
+    this.currentUsd = currentUsd;
+    this.reservedUsd = reservedUsd;
+    this.message = `剩餘預算不足以開始下一次請求（已花費 $${currentUsd.toFixed(4)}，下一次估計預留 $${reservedUsd.toFixed(4)}，上限 $${limitUsd.toFixed(2)} USD）`;
+  }
+}
+
+const finiteNonNegative = (value: unknown) => {
+  const number = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return Math.max(0, number);
+};
+
+export const normalizeUsageSnapshot = (snapshot?: Partial<TranslationUsageSnapshot> | null): TranslationUsageSnapshot => ({
+  inputTokens: finiteNonNegative(snapshot?.inputTokens),
+  cachedInputTokens: finiteNonNegative(snapshot?.cachedInputTokens),
+  cacheWriteInputTokens: finiteNonNegative(snapshot?.cacheWriteInputTokens),
+  outputTokens: finiteNonNegative(snapshot?.outputTokens),
+  reasoningTokens: finiteNonNegative(snapshot?.reasoningTokens),
+  inputUsd: finiteNonNegative(snapshot?.inputUsd),
+  outputUsd: finiteNonNegative(snapshot?.outputUsd),
+});
+
+export const estimateRequestBudget = (input: {
+  systemInstruction?: string;
+  promptText?: string;
+  base64Pdf?: string;
+  maxOutputTokens?: number;
+}): RequestBudgetEstimate => ({
+  inputTokens: estimateTextTokens(`${input.systemInstruction ?? ''}\n${input.promptText ?? ''}`)
+    + (input.base64Pdf ? 4_096 : 0),
+  outputTokens: Math.max(1, Math.round(input.maxOutputTokens ?? DEFAULT_REQUEST_MAX_OUTPUT_TOKENS)),
+});
+
 export class TranslationUsageMeter {
   inputTokens = 0;
   cachedInputTokens = 0;
@@ -27,6 +92,22 @@ export class TranslationUsageMeter {
   private itemizedInputUsd = 0;
   private itemizedOutputUsd = 0;
   private hasItemizedCost = false;
+
+  restore(snapshot?: Partial<TranslationUsageSnapshot> | null) {
+    const value = normalizeUsageSnapshot(snapshot);
+    this.inputTokens = value.inputTokens;
+    this.cachedInputTokens = Math.min(value.inputTokens, value.cachedInputTokens);
+    this.cacheWriteInputTokens = Math.min(
+      value.inputTokens - this.cachedInputTokens,
+      value.cacheWriteInputTokens,
+    );
+    this.outputTokens = value.outputTokens;
+    this.reasoningTokens = value.reasoningTokens;
+    this.itemizedInputUsd = value.inputUsd;
+    this.itemizedOutputUsd = value.outputUsd;
+    this.hasItemizedCost = value.inputUsd > 0 || value.outputUsd > 0;
+    return this.snapshot();
+  }
 
   reset() {
     this.inputTokens = 0;
@@ -75,6 +156,14 @@ export class TranslationUsageMeter {
     };
   }
 
+  snapshot(): TranslationUsageSnapshot {
+    return {
+      ...this.totals(),
+      inputUsd: this.itemizedInputUsd,
+      outputUsd: this.itemizedOutputUsd,
+    };
+  }
+
   cost(model: ModelConfig) {
     const fallback = calculateTokenCost(model, this.totals());
     if (!this.hasItemizedCost) return fallback;
@@ -94,6 +183,15 @@ export class TranslationUsageMeter {
       throw new TranslationBudgetExceededError(cost.totalUsd, limitUsd);
     }
     return cost;
+  }
+
+  assertCanReserve(model: ModelConfig, estimate: RequestBudgetEstimate, limitUsd: number) {
+    const current = this.cost(model);
+    const reserved = calculateTokenCost(model, estimate);
+    if (limitUsd > 0 && current.totalUsd + reserved.totalUsd > limitUsd) {
+      throw new TranslationBudgetReservationError(current.totalUsd, reserved.totalUsd, limitUsd);
+    }
+    return { currentUsd: current.totalUsd, reservedUsd: reserved.totalUsd };
   }
 }
 

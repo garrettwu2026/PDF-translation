@@ -45,7 +45,7 @@ export default function TranslationQualitySettings({
         </span>
       </label>
       <p className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2 text-xs leading-5 text-slate-400">
-        系統會自動檢查否定、條件、數字、單位與指定術語；每段最多複審一次，並以同供應商的均衡模型控制成本。
+        系統會自動檢查否定、條件、數字、單位與指定術語；小說模式另會保存角色正典與事件時間線。每段最多複審一次，並以同供應商的均衡模型控制成本。
       </p>
     </div>
   );

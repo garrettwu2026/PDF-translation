@@ -1,6 +1,6 @@
 # Codex project context
 
-Last updated: 2026-09-02 (Asia/Taipei)
+Last updated: 2026-09-03 (Asia/Taipei)
 
 ## Product
 
@@ -36,6 +36,7 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/models.ts`: centralized provider model catalog, prices, and cost calculations
 - `src/lib/document-analysis.ts`: one-request glossary, character, and style analysis
 - `src/lib/document-memory.ts`: whole-document, chapter, and recent-summary memory plus stable term merging
+- `src/lib/novel-continuity.ts`: structured canonical names, aliases, facts, chapter anchors, and novel timeline
 - `src/lib/translation-quality.ts`: deterministic protected-content and Markdown integrity checks
 - `src/lib/translation-risk.ts`: sentence risk scoring and selective stronger-model semantic review
 - `src/lib/protected-content.ts`: reversible placeholders for code, URLs, email, math, link targets, and HTML
@@ -46,7 +47,9 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/lib/translation-state-machine.ts`: explicit translation lifecycle states
 - `src/lib/structured-output.ts`: shared Gemini/OpenAI JSON Schema request configuration
 - `src/lib/translation-budget.ts`: token usage accounting, cost ceilings, and retry bounds
+- `src/lib/translation-progress.ts`: transactional in-flight versus committed chunk progress
 - `src/hooks/useTranslationUsage.ts`: translation-run usage state
+- `src/hooks/useBudgetedAiProviders.ts`: budget-reserved provider calls and document-level usage coordination
 - `src/hooks/useDocumentExports.ts`: copy, Markdown, PDF, and EPUB export coordination
 - `src/lib/browser-exports.ts`: Markdown, EPUB, and safe print export helpers
 - `src/lib/pdf-text-extraction.ts`: converter-mode PDF text extraction
@@ -57,6 +60,9 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/components/TranslationCostSummary.tsx`: estimated and provider-reported actual cost UI
 - `src/components/AccessibleDialog.tsx`: shared modal semantics, focus trap, Escape handling, and focus restoration
 - `src/components/DocumentUploadDropzone.tsx`: click, keyboard, and drag-and-drop document selection
+- `src/components/WorkspaceHeader.tsx`: application header and provider-key status
+- `src/components/TranslationActionPanel.tsx`: run controls, progress, status, and recoverable errors
+- `src/components/DocumentResultPanel.tsx`: preview and export toolbar
 - `server.ts`: Express/Vite server and health endpoint
 - `server/epub.ts`: EPUB request validation, sanitization, and generation
 - `server/rate-limit.ts`: bounded fixed-window request limiter with stale-client pruning
@@ -107,7 +113,7 @@ npm start
 - API keys default to `sessionStorage`; persistent `localStorage` is only used when the user explicitly enables “remember on this device”. The stored value is encoded, not encrypted.
 - PDF worker messages are request-scoped and use acknowledgement backpressure. Preserve cancellation and stale-response guards when changing extraction or token counting.
 - Translation requests receive an `AbortSignal`; keep provider calls, retry delays, and worker cancellation connected to the same stop action.
-- The default run budget is USD 5 and the retry ceiling is user-adjustable from 1–6. A budget stop must preserve resumable history.
+- The default whole-document budget is USD 5 and the retry ceiling is user-adjustable from 1–6. Provider-reported usage and itemized cost persist in history across pause/resume. Every request checks estimated input plus an explicit output ceiling before starting; this is an approximate safeguard, not a guaranteed provider billing cap (especially for PDF input or usage missing after cancellation). Old history without usage snapshots cannot reconstruct earlier charges and shows a warning.
 - Browser history is automatically retained to the newest 25 records within an approximate 12-million-character capacity. In-progress translations checkpoint after the first chunk, every third chunk, and at completion/stop; retention scans are reserved for pruning checkpoints.
 - Keep model IDs, provider mapping, and displayed prices centralized in `src/lib/models.ts`; do not duplicate the catalog in UI components.
 - Respect model capability flags in `src/lib/models.ts`. GPT-5.6 currently requires the provider-default temperature, so OpenAI requests must omit custom `temperature` values.
@@ -125,6 +131,9 @@ npm start
 - Automatic document classification persists the resolved mode in history. Legacy automatic-mode records are reanalyzed once when resumed.
 - Provider failures are classified as authentication, invalid request, rate limit, transient, or unknown. Only quality, rate-limit, and transient failures retry; Retry-After is honored when supplied.
 - Layered translation memory separates a global summary, up to 24 chapter summaries, the latest six developments, and the immediate prior source/translation context.
+- Novel mode additionally keeps a versioned structured canon of up to 200 entities and 80 timeline entries. The first accepted name remains canonical; later conflicts are retained as non-canonical aliases, reported diagnostically, and converted into locked glossary entries for subsequent chunks.
+- `currentChunk` in history is the number of fully committed translation chunks. An in-flight chunk must never be persisted as completed; pause, provider failure, or budget stop resumes from that same unfinished chunk.
+- Text, glossary, character facts, and novel memory roll back together to the last committed chunk on failure; already-incurred cost does not roll back. Store layered summary separately from novel context to avoid duplicated memory on resume. Persist extraction completion and split mode; incomplete PDF extraction requires the original file and must never be translated as a complete source.
 - Upload limits are 50 MB for PDF, 12 MB for Markdown, and 3,600 pages per PDF. Keep UI, worker, and conversion validation aligned through `src/lib/file-limits.ts`.
 - Native PDF extraction uses item coordinates to order two-column pages, removes repeated page edges/page numbers when enough pages are available, and repairs soft/hyphenated line breaks across page boundaries before AI formatting or converter output.
 - Do not weaken EPUB sanitization or server request limits.

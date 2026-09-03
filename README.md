@@ -12,7 +12,8 @@ A Traditional Chinese document translation web app for PDF and Markdown files. I
 - Automatic or explicit novel, technical, academic, business/legal, and general document modes
 - Optional bounded chapter-level consistency proofreading across translated chunks
 - Provider-neutral translation-quality regression baseline
-- Live provider-reported cost accounting for cached input and reasoning tokens
+- Document-level provider-reported cost accounting that survives pause/resume, with a pre-request safety reserve
+- Long-novel continuity memory for canonical character names, aliases, facts, chapters, and recent timeline events
 - Model-price verification dates and upcoming review reminders linked to official pricing
 - Progress saved in IndexedDB so long translations can be resumed
 - API keys stay in the user's browser and are sent directly to the selected AI provider
@@ -62,12 +63,14 @@ Browser storage is convenient, not a password vault. Avoid saving API keys on sh
 ```text
 server.ts             Express/Vite entry point
 server/epub.ts        EPUB validation, sanitization, and generation
-src/App.tsx           Page composition and high-level translation orchestration
-src/components/       Model, pricing, cost, dialog, and preview UI
+src/App.tsx           Page composition and high-level translation coordination
+src/components/       Model, pricing, cost, action, header, dialog, and preview UI
+src/hooks/            Budget-aware provider access, usage, exports, and workflow state hooks
 src/pdf.worker.ts     Background PDF parsing and OCR chunk preparation
 src/lib/models.ts     Model catalog, review schedule, and token pricing
 src/lib/provider-usage.ts Provider usage normalization
 src/lib/db.ts         IndexedDB translation history
+src/lib/novel-continuity.ts  Structured long-novel canon and timeline memory
 src/lib/text.ts       Markdown chunking and binary conversion utilities
 src/lib/document-memory.ts Layered long-document translation memory
 src/lib/translation-quality.ts Deterministic translation integrity checks

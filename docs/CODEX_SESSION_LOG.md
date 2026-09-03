@@ -264,3 +264,26 @@ Decisions and outcome:
 - Treat novel and general glossary drift as a non-blocking warning that can trigger review, while retaining blocking glossary enforcement for technical, academic, and business/legal modes.
 - Use GPT-5.6 Terra for OpenAI review unless the user explicitly selected Sol; use Gemini 3.7 Flash unless the user explicitly selected Gemini 3.1 Pro Preview.
 - Add regression coverage for both model routing and a quality retry after an unsuccessful semantic review.
+
+## 2026-09-03
+
+### Reliable long-document resume, document budgets, and novel continuity
+
+User request:
+
+> Implement all P0 recommendations, long-novel consistency, and continue splitting App.tsx.
+
+Decisions and outcome:
+
+- Treat history progress as committed chunks only; a chunk becomes resumable only after translation, correction, selective review, chapter review, and result assembly succeed.
+- Persist normalized provider usage and itemized USD cost with each document so raising a limit and resuming no longer resets the document's displayed or enforced spend.
+- Check estimated input/output cost before every provider request and set explicit output-token ceilings; stop when this estimate exceeds remaining budget. This reduces overshoot but cannot guarantee an exact provider billing cap.
+- Add structured novel canon memory for canonical names, conflicting aliases, character facts, chapter anchors, and recent timeline events; feed canonical names back into the locked glossary.
+- Extract budget-aware provider coordination, the workspace header, translation action/progress UI, and result preview/export UI from `App.tsx`.
+
+Continuation after interruption:
+
+- Roll back in-flight text and memory together, while keeping incurred usage; fix completed-document restart appending old text.
+- Mark partial PDF extraction explicitly and require the original file to retry; do not silently drop a failed final OCR chunk.
+- Preserve split mode, reject mismatched resume boundaries, normalize legacy memory, and warn when old records lack cost data.
+- Scale output ceilings with source size and reject oversized unsplit chunks before paid requests. Novel memory remains a model-assisted consistency aid, not a proof of factual or chronological correctness.

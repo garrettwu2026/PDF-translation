@@ -3,9 +3,18 @@ import test from 'node:test';
 import { getModelConfig } from '../src/lib/models.ts';
 import {
   TranslationBudgetExceededError,
+  TranslationBudgetReservationError,
   TranslationUsageMeter,
   clampRetryLimit,
+  estimateRequestBudget,
+  estimateTranslationOutputLimit,
 } from '../src/lib/translation-budget.ts';
+
+test('output ceilings grow with source length and reject oversized unsplit content', () => {
+  assert.equal(estimateTranslationOutputLimit('Hello.'), 4096);
+  assert.ok(estimateTranslationOutputLimit('中文'.repeat(1800)) > 4096);
+  assert.throws(() => estimateTranslationOutputLimit('中文'.repeat(20000)), /分段翻譯/);
+});
 
 test('usage meter accumulates provider usage and enforces a USD limit', () => {
   const meter = new TranslationUsageMeter();
@@ -52,4 +61,27 @@ test('usage meter prices mixed translation and review models independently', () 
   assert.equal(cost.inputUsd, 0.2);
   assert.equal(cost.outputUsd, 2);
   assert.equal(cost.totalUsd, 2.2);
+});
+
+test('usage snapshots restore cumulative document cost across resume', () => {
+  const meter = new TranslationUsageMeter();
+  meter.add({ promptTokenCount: 100_000, candidatesTokenCount: 20_000 }, getModelConfig('gpt-5.6-terra'));
+  const restored = new TranslationUsageMeter();
+  restored.restore(meter.snapshot());
+  assert.deepEqual(restored.snapshot(), meter.snapshot());
+  assert.equal(restored.cost(getModelConfig('gpt-5.6-terra')).totalUsd, 0.44);
+});
+
+test('request reservation stops before the next call can exceed the document budget', () => {
+  const meter = new TranslationUsageMeter();
+  const model = getModelConfig('gpt-5.6-sol');
+  meter.add({ promptTokenCount: 1_000_000, candidatesTokenCount: 40_000 }, model);
+  assert.throws(
+    () => meter.assertCanReserve(model, { inputTokens: 10_000, outputTokens: 20_000 }, 5),
+    TranslationBudgetReservationError,
+  );
+  assert.deepEqual(estimateRequestBudget({ promptText: 'abcdefgh', maxOutputTokens: 123 }), {
+    inputTokens: 3,
+    outputTokens: 123,
+  });
 });

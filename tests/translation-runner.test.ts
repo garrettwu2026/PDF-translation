@@ -3,6 +3,33 @@ import test from 'node:test';
 import { protectContent } from '../src/lib/protected-content.ts';
 import { annotateTranslationSegments } from '../src/lib/sentence-segments.ts';
 import { translateChunkWithQuality } from '../src/lib/translation-runner.ts';
+import { TranslationBudgetReservationError } from '../src/lib/translation-budget.ts';
+
+for (const stage of ['draft', 'correction'] as const) {
+  test(`budget reservation failure during ${stage} stops without retry or further billing`, async () => {
+    const error = new TranslationBudgetReservationError(4.9, 0.2, 5);
+    let requests = 0;
+    let previews = 0;
+    await assert.rejects(translateChunkWithQuality({
+      sourceText: 'A short sentence.', model: 'gpt-5.6-luna', chunkNumber: 1,
+      totalChunks: 1, retryLimit: 3, style: '一般', glossary: '無', characterMap: '無',
+      plotSummary: '', previousSourceText: '', previousTranslatedText: '',
+      customInstructions: '', documentTypeInstruction: '', documentType: 'general',
+      signal: new AbortController().signal,
+      generateStream: async function* () {
+        requests++;
+        if (stage === 'draft') throw error;
+        yield { text: '[[PDFT_SEG:S0001]]簡短句子。' };
+      },
+      generate: async () => { requests++; throw error; },
+      onUsage: () => undefined,
+      onPreview: () => { previews++; },
+      onStage: () => undefined,
+    }), (actual) => actual === error);
+    assert.equal(requests, stage === 'draft' ? 1 : 2);
+    assert.equal(previews, stage === 'draft' ? 0 : 1);
+  });
+}
 
 test('chunk pipeline restores protected content and repairs only a missing sentence', async () => {
   const source = 'Run `npm test`. First sentence. Second sentence.';

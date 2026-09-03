@@ -1,9 +1,14 @@
+import type { NovelContinuityMemory } from './novel-continuity.ts';
+import type { TranslationUsageSnapshot } from './translation-budget.ts';
+
 export interface HistoryRecord {
   id: string;
   title: string;
   author: string;
   coverImage: string | null;
   extractedText: string;
+  extractionComplete?: boolean;
+  splitTranslation?: boolean;
   translatedText: string;
   currentChunk: number;
   totalChunks: number;
@@ -17,6 +22,9 @@ export interface HistoryRecord {
   documentType?: string;
   effectiveDocumentType?: string;
   chapterProofreading?: boolean;
+  novelContinuity?: NovelContinuityMemory;
+  usageSnapshot?: TranslationUsageSnapshot;
+  budgetUsd?: number;
 }
 
 const DB_NAME = 'pdf-translator-db';
@@ -60,7 +68,9 @@ export const estimateHistoryRecordCharacters = (record: HistoryRecord) =>
   + (record.translationStyle?.length ?? 0)
   + (record.glossaryText?.length ?? 0)
   + (record.characterMap?.length ?? 0)
-  + (record.plotSummary?.length ?? 0);
+  + (record.plotSummary?.length ?? 0)
+  + (record.novelContinuity ? JSON.stringify(record.novelContinuity).length : 0)
+  + (record.usageSnapshot ? JSON.stringify(record.usageSnapshot).length : 0);
 
 export const selectHistoryRecordsToKeep = (
   records: HistoryRecord[],

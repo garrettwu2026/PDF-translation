@@ -1,7 +1,11 @@
 import { useCallback, useRef, useState } from 'react';
 import type { UsageMetadata } from '../lib/ai-providers';
-import { getModelConfig } from '../lib/models';
-import { TranslationUsageMeter } from '../lib/translation-budget';
+import { getModelConfig, USD_TO_TWD } from '../lib/models';
+import {
+  TranslationUsageMeter,
+  type RequestBudgetEstimate,
+  type TranslationUsageSnapshot,
+} from '../lib/translation-budget';
 
 const EMPTY_USAGE = {
   inputTokens: 0,
@@ -23,14 +27,41 @@ export const useTranslationUsage = () => {
     setActualCost(EMPTY_COST);
   }, []);
 
+  const restoreUsage = useCallback((snapshot?: Partial<TranslationUsageSnapshot> | null) => {
+    const restored = meterRef.current.restore(snapshot);
+    const totals = meterRef.current.totals();
+    setUsageTotals(totals);
+    const totalUsd = restored.inputUsd + restored.outputUsd;
+    setActualCost({
+      inputUsd: restored.inputUsd,
+      outputUsd: restored.outputUsd,
+      totalUsd,
+      totalTwd: totalUsd * USD_TO_TWD,
+    });
+  }, []);
+
   const recordUsage = useCallback((usage: UsageMetadata | undefined, modelId: string, limitUsd: number) => {
     const model = getModelConfig(modelId);
     const totals = meterRef.current.add(usage, model);
     setUsageTotals(totals);
-    const cost = meterRef.current.enforce(model, limitUsd);
+    const cost = meterRef.current.cost(model);
     setActualCost(cost);
+    meterRef.current.enforce(model, limitUsd);
     return cost;
   }, []);
 
-  return { ...usageTotals, actualCost, resetUsage, recordUsage };
+  const assertCanReserve = useCallback((estimate: RequestBudgetEstimate, modelId: string, limitUsd: number) =>
+    meterRef.current.assertCanReserve(getModelConfig(modelId), estimate, limitUsd), []);
+
+  const getUsageSnapshot = useCallback(() => meterRef.current.snapshot(), []);
+
+  return {
+    ...usageTotals,
+    actualCost,
+    resetUsage,
+    restoreUsage,
+    recordUsage,
+    assertCanReserve,
+    getUsageSnapshot,
+  };
 };

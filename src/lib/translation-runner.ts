@@ -35,6 +35,7 @@ import {
   getRetryDelayMs,
   isRetryableProviderError,
 } from './provider-errors.ts';
+import { estimateTranslationOutputLimit, TranslationBudgetExceededError } from './translation-budget.ts';
 
 export type ChunkTranslationResult = {
   translatedText: string;
@@ -87,6 +88,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
     preservePlaceholdersInstruction: formatProtectedContentInstruction(protectedSource.entries),
   });
   let semanticReviewAttempted = false;
+  const maxOutputTokens = estimateTranslationOutputLimit(annotatedSource.text);
 
   for (let attempt = 0; attempt < options.retryLimit; attempt++) {
     let draft = '';
@@ -98,6 +100,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         systemInstruction,
         promptText: buildTranslationPrompt(annotatedSource.text),
         temperature: 0.2,
+        maxOutputTokens,
         signal: options.signal,
       });
       for await (const chunk of stream) {
@@ -124,6 +127,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
           deterministicFindings: formatQualityIssuesForPrompt(draftQuality),
         }),
         temperature: 0,
+        maxOutputTokens,
         jsonSchema: CORRECTION_SCHEMA,
         signal: options.signal,
       });
@@ -142,6 +146,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
           model: options.model,
           promptText: buildSentenceRepairPrompt(annotatedSource.segments, missingIds, corrected),
           temperature: 0,
+          maxOutputTokens: 2_048,
           jsonSchema: SENTENCE_REPAIR_SCHEMA,
           signal: options.signal,
         });
@@ -183,6 +188,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
               documentTypeInstruction: options.documentTypeInstruction,
             }),
             temperature: 0,
+            maxOutputTokens: 2_048,
             jsonSchema: SEMANTIC_REVIEW_SCHEMA,
             signal: options.signal,
           });
@@ -198,7 +204,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
             throw new TranslationQualityError('Semantic review changed sentence markers');
           }
         } catch (reviewError) {
-          if (isAbortError(reviewError) || reviewError instanceof Error && reviewError.name === 'TranslationBudgetExceededError') throw reviewError;
+          if (isAbortError(reviewError) || reviewError instanceof TranslationBudgetExceededError) throw reviewError;
           if (reviewError instanceof TranslationQualityError) throw reviewError;
           options.onWarning?.('translation_selective_semantic_review_failed', { chunk: options.chunkNumber });
         }
@@ -221,7 +227,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         chunkSummary: correction.chunkSummary,
       };
     } catch (error) {
-      if (isAbortError(error) || error instanceof DOMException && error.name === 'AbortError' || (error instanceof Error && error.name === 'TranslationBudgetExceededError')) throw error;
+      if (isAbortError(error) || error instanceof DOMException && error.name === 'AbortError' || error instanceof TranslationBudgetExceededError) throw error;
       const providerError = classifyProviderError(error);
       const retryable = error instanceof TranslationQualityError || isRetryableProviderError(providerError);
       if (!retryable || attempt + 1 >= options.retryLimit) {

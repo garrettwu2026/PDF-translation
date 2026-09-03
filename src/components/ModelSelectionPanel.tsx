@@ -7,6 +7,7 @@ type Props = {
   selectedModelData: ModelConfig;
   disabled: boolean;
   budgetUsd: number;
+  spentUsd: number;
   retryLimit: number;
   estimatedUsd: number;
   onModelChange: (modelId: string) => void;
@@ -19,6 +20,7 @@ export default function ModelSelectionPanel({
   selectedModelData,
   disabled,
   budgetUsd,
+  spentUsd,
   retryLimit,
   estimatedUsd,
   onModelChange,
@@ -76,6 +78,7 @@ export default function ModelSelectionPanel({
       <ModelCatalogNotice />
       <TranslationLimits
         budgetUsd={budgetUsd}
+        spentUsd={spentUsd}
         retryLimit={retryLimit}
         estimatedUsd={estimatedUsd}
         onBudgetChange={onBudgetChange}

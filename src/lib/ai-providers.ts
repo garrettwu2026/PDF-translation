@@ -26,6 +26,7 @@ export type GenerateContentOptions = {
   temperature?: number;
   jsonMode?: boolean;
   jsonSchema?: StructuredOutputSchema;
+  maxOutputTokens?: number;
   signal?: AbortSignal;
 };
 
@@ -34,6 +35,7 @@ export type GenerateStreamOptions = {
   systemInstruction?: string;
   promptText: string;
   temperature?: number;
+  maxOutputTokens?: number;
   signal?: AbortSignal;
 };
 
@@ -69,6 +71,7 @@ const generateContentRequest = async (
         ...getTemperatureConfig(model, options.temperature ?? 0.1),
         systemInstruction: options.systemInstruction,
         ...getGoogleStructuredOutputConfig(options.jsonMode, options.jsonSchema),
+        maxOutputTokens: options.maxOutputTokens,
         abortSignal: options.signal,
       },
     });
@@ -88,6 +91,7 @@ const generateContentRequest = async (
     model: options.model,
     messages,
     ...getTemperatureConfig(model, options.temperature ?? 0.1),
+    max_completion_tokens: options.maxOutputTokens,
     response_format: getOpenAIResponseFormat(options.jsonMode, options.jsonSchema),
   }, { signal: options.signal });
   return {
@@ -123,6 +127,7 @@ async function* generateContentStreamRequest(
       config: {
         systemInstruction: options.systemInstruction,
         ...getTemperatureConfig(model, options.temperature ?? 0.2),
+        maxOutputTokens: options.maxOutputTokens,
         abortSignal: options.signal,
       },
     });
@@ -145,6 +150,7 @@ async function* generateContentStreamRequest(
       { role: 'user' as const, content: options.promptText },
     ],
     ...getTemperatureConfig(model, options.temperature ?? 0.2),
+    max_completion_tokens: options.maxOutputTokens,
     stream: true,
     stream_options: { include_usage: true },
   }, { signal: options.signal });

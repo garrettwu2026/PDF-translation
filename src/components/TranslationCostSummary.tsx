@@ -62,7 +62,7 @@ export default function TranslationCostSummary({
 
           {hasActualUsage && (
             <div className="pt-4 mt-4 border-t border-slate-700/50 space-y-2">
-              <h4 className="text-sm font-semibold text-slate-300 flex items-center gap-1.5 mb-2"><Clock className="w-4 h-4 text-purple-400" />實際使用量與成本（即時更新）</h4>
+              <h4 className="text-sm font-semibold text-slate-300 flex items-center gap-1.5 mb-2"><Clock className="w-4 h-4 text-purple-400" />整份文件累積用量與成本</h4>
               <div className="flex justify-between"><span className="text-slate-500">實際輸入 Token:</span><span className="font-medium text-slate-300">{actualUsage.inputTokens.toLocaleString()}</span></div>
               {actualUsage.cachedInputTokens > 0 && <div className="flex justify-between"><span className="text-slate-500">其中快取命中:</span><span className="font-medium text-emerald-300">{actualUsage.cachedInputTokens.toLocaleString()}</span></div>}
               {actualUsage.cacheWriteInputTokens > 0 && <div className="flex justify-between"><span className="text-slate-500">其中快取寫入:</span><span className="font-medium text-slate-300">{actualUsage.cacheWriteInputTokens.toLocaleString()}</span></div>}

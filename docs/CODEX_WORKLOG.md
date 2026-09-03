@@ -161,3 +161,16 @@ All dates use Asia/Taipei unless noted otherwise.
 - Made glossary drift non-blocking in novel and general modes while retaining it as a review signal and preserving strict enforcement for precision document modes.
 - Routed non-premium OpenAI review to GPT-5.6 Terra and non-premium Gemini review to Gemini 3.7 Flash; explicitly selected Sol and Pro models remain unchanged.
 - Added regression tests for economical reviewer selection, novel glossary behavior, and the one-review-per-chunk guarantee.
+
+## 2026-09-03 — Transactional resume, persistent budgets, and novel canon
+
+- Fixed the resume boundary so an interrupted or over-budget in-flight chunk is retried instead of being skipped.
+- Persisted cumulative tokens and itemized provider costs in backward-compatible IndexedDB records and restored them with the document budget.
+- Added request-level budget reservation and explicit output-token ceilings across extraction, analysis, translation, correction, repair, semantic review, and chapter review.
+- Added versioned long-novel continuity memory with canonical name preservation, alias-conflict detection, facts, chapter anchors, and a bounded timeline.
+- Fed novel canonical names into subsequent glossary enforcement and persisted continuity across history reloads.
+- Extracted budgeted provider access, the workspace header, translation action/progress panel, and document result panel from `App.tsx`.
+- Added budget-resume, request-reservation, transactional-progress, memory immutability, malformed history, output-sizing, and no-retry-on-budget-stop regression coverage, bringing the unit suite to 100 tests.
+- Completed interruption recovery: text and memory roll back together, incurred charges stay recorded, completed runs restart with empty output, and partial PDF extraction cannot masquerade as complete input. Persist split mode and reject changed resume boundaries.
+- Validation: TypeScript check, all 100 unit tests, and production Vite build pass using the bundled Node executable (npm is not on PATH). Browser smoke checks verified budget editing to USD 10, API settings dialog, converter switching, and no console errors; no paid provider requests were made. Standalone Playwright execution was unavailable because its Chromium binary is missing.
+- Budget preflight is an estimate, not a hard billing guarantee. Legacy records cannot recover historical charges. Novel event summaries follow textual order and preserve explicit time/POV clues without inferring unknown chronology.

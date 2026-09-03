@@ -1,5 +1,5 @@
-import React, { lazy, Suspense, useState, useRef, useEffect } from 'react';
-import { FileText, Play, Download, Loader2, AlertCircle, CheckCircle2, Key, Copy, Book, X, ExternalLink, History, Image as ImageIcon, Info } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Book, X, Image as ImageIcon } from 'lucide-react';
 import {
   saveHistory,
   getAllHistory,
@@ -8,12 +8,11 @@ import {
   HistoryStorageError,
   shouldCheckpointTranslationProgress,
 } from './lib/db';
-import { splitMarkdownIntoTokenChunks } from './lib/text';
+import { estimateTextTokens, splitMarkdownIntoTokenChunks } from './lib/text';
 import { MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
 import { buildDocumentAnalysisPrompt, DOCUMENT_ANALYSIS_SCHEMA, parseDocumentAnalysis } from './lib/document-analysis';
 import { DEFAULT_MODEL_ID, estimatePipelineCost, getModelConfig, MODELS } from './lib/models';
 import { reportError, reportWarning } from './lib/diagnostics';
-import { generateContent, generateContentStream, type GenerateContentOptions, type GenerateStreamOptions } from './lib/ai-providers';
 import { abortableDelay, isAbortError, throwIfAborted } from './lib/abort';
 import {
   DEFAULT_TRANSLATION_BUDGET_USD,
@@ -38,7 +37,7 @@ import { DeleteHistoryDialog, HistoryModal } from './components/HistoryDialogs';
 import InfoModal from './components/InfoModal';
 import ModelSelectionPanel from './components/ModelSelectionPanel';
 import TranslationCostSummary from './components/TranslationCostSummary';
-import { useTranslationUsage } from './hooks/useTranslationUsage';
+import { useBudgetedAiProviders } from './hooks/useBudgetedAiProviders';
 import { downloadBlob, requestEpub } from './lib/browser-exports';
 import { extractPdfText } from './lib/pdf-text-extraction';
 import {
@@ -69,30 +68,37 @@ import {
 import { protectContent, restoreProtectedContent } from './lib/protected-content';
 import { assessTranslationQuality } from './lib/translation-quality';
 import { useDocumentExports } from './hooks/useDocumentExports';
+import WorkspaceHeader from './components/WorkspaceHeader';
+import TranslationActionPanel from './components/TranslationActionPanel';
+import DocumentResultPanel from './components/DocumentResultPanel';
+import {
+  EMPTY_NOVEL_CONTINUITY,
+  formatNovelContinuity,
+  getNovelCanonicalGlossary,
+  mergeNovelContinuity,
+  normalizeNovelContinuity,
+  seedNovelContinuity,
+  type NovelContinuityMemory,
+} from './lib/novel-continuity';
+import {
+  beginTranslationChunk,
+  commitTranslationChunk,
+  createTranslationProgress,
+  pauseTranslationProgress,
+} from './lib/translation-progress';
 
-const MarkdownPreview = lazy(() => import('./components/MarkdownPreview'));
-const markdownFallback = <div className="text-sm text-slate-500">正在載入預覽...</div>;
 export default function App() {
   const [activeTab, setActiveTab] = useState<'translate' | 'converter'>('translate');
   const [customTitle, setCustomTitle] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedText, setExtractedText] = useState('');
+  const [extractionComplete, setExtractionComplete] = useState(true);
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const [splitTranslation, setSplitTranslation] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [base64Data, setBase64Data] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number | null>(null);
-  const {
-    inputTokens: actualInputTokens,
-    cachedInputTokens: actualCachedInputTokens,
-    cacheWriteInputTokens: actualCacheWriteInputTokens,
-    outputTokens: actualOutputTokens,
-    reasoningTokens: actualReasoningTokens,
-    actualCost,
-    resetUsage,
-    recordUsage,
-  } = useTranslationUsage();
   const [translationBudgetUsd, setTranslationBudgetUsd] = useState(DEFAULT_TRANSLATION_BUDGET_USD);
   const [translationRetryLimit, setTranslationRetryLimit] = useState(DEFAULT_TRANSLATION_RETRY_LIMIT);
   const [isCalculating, setIsCalculating] = useState(false);
@@ -107,6 +113,7 @@ export default function App() {
   const [translationStyle, setTranslationStyle] = useState<string | null>(null);
   const [characterMap, setCharacterMap] = useState<string>('');
   const [plotSummary, setPlotSummary] = useState<string>('');
+  const [novelContinuity, setNovelContinuity] = useState<NovelContinuityMemory>(EMPTY_NOVEL_CONTINUITY);
   const statusMessage = translationMachine.state.statusMessage;
   const setStatusMessage = translationMachine.setStatus;
   const [documentType, setDocumentType] = useState<DocumentTypeId>('auto');
@@ -148,6 +155,8 @@ export default function App() {
     setAuthorName(record.author || '');
     setCoverImage(record.coverImage);
     setExtractedText(record.extractedText);
+    setExtractionComplete(record.extractionComplete !== false);
+    setSplitTranslation(record.splitTranslation !== false);
     setTranslatedText(record.translatedText);
     setCurrentChunk(record.currentChunk);
     setTotalChunks(record.totalChunks);
@@ -159,6 +168,9 @@ export default function App() {
     setGlossary(record.glossaryText || '無');
     setCharacterMap(record.characterMap || '');
     setPlotSummary(record.plotSummary || '');
+    setNovelContinuity(normalizeNovelContinuity(record.novelContinuity));
+    restoreUsage(record.usageSnapshot);
+    if (typeof record.budgetUsd === 'number' && Number.isFinite(record.budgetUsd)) setTranslationBudgetUsd(Math.max(0, record.budgetUsd));
     const restoredDocumentType = normalizeDocumentType(record.documentType);
     setDocumentType(restoredDocumentType);
     setResolvedDocumentType(
@@ -169,11 +181,15 @@ export default function App() {
     
     setFile(null);
     setBase64Data(null);
-    setTokenCount(null);
+    setTokenCount(estimateTextTokens(record.extractedText));
     
     setShowHistory(false);
     
-    if (record.status === 'translating' || record.status === 'error') {
+    if (record.extractionComplete === false) {
+      showToast('這份紀錄的 PDF 擷取尚未完成，請重新上傳原始 PDF；部分文字仍可下載。', 'error');
+    } else if (!record.usageSnapshot) {
+      showToast('舊紀錄未保存費用，後續累積成本不含先前用量。', 'success');
+    } else if (record.status === 'translating' || record.status === 'error') {
       showToast('已載入歷史紀錄，您可以繼續翻譯', 'success');
     } else {
       showToast('已載入歷史紀錄', 'success');
@@ -196,6 +212,8 @@ export default function App() {
       setCurrentChunk(0);
       setTotalChunks(0);
       setCustomTitle('');
+      setNovelContinuity(EMPTY_NOVEL_CONTINUITY);
+      resetUsage();
     }
     setHistoryToDelete(null);
     showToast('歷史紀錄已刪除', 'success');
@@ -248,6 +266,25 @@ export default function App() {
   const translationCancelledRef = useRef(false);
   const translationAbortControllerRef = useRef<AbortController | null>(null);
   const tokenAbortControllerRef = useRef<AbortController | null>(null);
+  const {
+    inputTokens: actualInputTokens,
+    cachedInputTokens: actualCachedInputTokens,
+    cacheWriteInputTokens: actualCacheWriteInputTokens,
+    outputTokens: actualOutputTokens,
+    reasoningTokens: actualReasoningTokens,
+    actualCost,
+    resetUsage,
+    restoreUsage,
+    recordUsage,
+    getUsageSnapshot,
+    generateContent: generateContentWrapper,
+    generateContentStream: generateContentStreamWrapper,
+  } = useBudgetedAiProviders({
+    googleApiKey: isManualKeyActive ? manualApiKey : undefined,
+    openaiApiKey: isOpenaiKeyActive ? manualOpenaiApiKey : undefined,
+    budgetUsd: translationBudgetUsd,
+    getSignal: () => translationAbortControllerRef.current?.signal,
+  });
 
   const handleSaveApiKeys = () => {
     const trimmedGoogle = manualApiKey.trim();
@@ -313,15 +350,6 @@ export default function App() {
     };
   }, [selectedModel, base64Data, file]);
 
-  const providerCredentials = () => ({
-    googleApiKey: isManualKeyActive ? manualApiKey : undefined,
-    openaiApiKey: isOpenaiKeyActive ? manualOpenaiApiKey : undefined,
-  });
-  const generateContentWrapper = (options: GenerateContentOptions) =>
-    generateContent({ ...options, signal: options.signal ?? translationAbortControllerRef.current?.signal }, providerCredentials());
-  const generateContentStreamWrapper = (options: GenerateStreamOptions) =>
-    generateContentStream({ ...options, signal: options.signal ?? translationAbortControllerRef.current?.signal }, providerCredentials());
-
   const handleFileUpload = (selectedFile: File) => {
     if (isTranslating) {
       translationCancelledRef.current = true;
@@ -334,6 +362,7 @@ export default function App() {
       const upload = validateUpload(selectedFile);
       isPdf = upload.kind === 'pdf';
       isMd = upload.kind === 'markdown';
+      setExtractionComplete(isMd);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '檔案格式或大小不符合限制。');
       return;
@@ -362,8 +391,10 @@ export default function App() {
     setGlossary('無');
     setCharacterMap('');
     setPlotSummary('');
+    setNovelContinuity(EMPTY_NOVEL_CONTINUITY);
     setResolvedDocumentType(null);
     setCustomTitle('');
+    resetUsage();
     
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -512,11 +543,25 @@ export default function App() {
 
   const handleTranslate = async () => {
     if (!extractedText && (!file || !base64Data)) return;
+    if (!extractionComplete && !file) {
+      setError('PDF 文字擷取尚未完成，請重新上傳原始 PDF，避免只翻譯部分文件。');
+      return;
+    }
 
     const activeModel = getModelConfig(selectedModel);
-    const projectedCost = estimatePipelineCost(activeModel, tokenCount ?? 0).totalUsd;
-    if (translationBudgetUsd > 0 && projectedCost > translationBudgetUsd) {
-      setError(`預估流程成本 $${projectedCost.toFixed(2)} USD，已超過目前 $${translationBudgetUsd.toFixed(2)} USD 上限。請調高上限、縮短文件或改用較省成本的模型。`);
+    let startingChunk = currentChunk;
+    let startsNewDocumentRun = startingChunk === 0 && !currentFileId;
+    if (currentChunk === totalChunks && totalChunks > 0) {
+      startingChunk = 0;
+      startsNewDocumentRun = true;
+    }
+
+    const documentTokens = tokenCount ?? estimateTextTokens(extractedText);
+    const remainingRatio = totalChunks > 0 ? Math.max(0, totalChunks - startingChunk) / totalChunks : 1;
+    const projectedRemaining = estimatePipelineCost(activeModel, Math.round(documentTokens * remainingRatio)).totalUsd;
+    const cumulativeProjectedCost = (startsNewDocumentRun ? 0 : actualCost.totalUsd) + projectedRemaining;
+    if (translationBudgetUsd > 0 && cumulativeProjectedCost > translationBudgetUsd) {
+      setError(`預估完成剩餘內容後，整份文件成本約 $${cumulativeProjectedCost.toFixed(2)} USD，已超過目前 $${translationBudgetUsd.toFixed(2)} USD 上限。請調高文件上限或改用較省成本的模型。`);
       return;
     }
 
@@ -529,46 +574,47 @@ export default function App() {
       return;
     }
     
-    let startingChunk = currentChunk;
-    if (currentChunk === totalChunks && totalChunks > 0) {
-      startingChunk = 0;
-      setCurrentChunk(0);
-      setTranslatedText('');
-      setTranslationStyle(null);
-      setGlossary('無');
-      setCharacterMap('');
-      setPlotSummary('');
-      setResolvedDocumentType(null);
-    }
-    
+    if (startsNewDocumentRun) resetUsage();
     translationAbortControllerRef.current?.abort();
     const translationController = new AbortController();
     translationAbortControllerRef.current = translationController;
     translationCancelledRef.current = false;
     translationMachine.start(extractedText && startingChunk > 0 ? 'translating' : 'extracting');
     if (startingChunk === 0) {
+      setCurrentChunk(0);
       setTranslatedText('');
       setTranslationStyle(null);
+      setGlossary('無');
       setCharacterMap('');
       setPlotSummary('');
+      setNovelContinuity(EMPTY_NOVEL_CONTINUITY);
+      setResolvedDocumentType(null);
     }
     setStatusMessage('');
     setError(null);
     const currentStartTime = Date.now();
     setStartTime(currentStartTime);
     setEstimatedRemainingTime(null);
-    resetUsage();
-    
     const fileId = currentFileId || crypto.randomUUID();
     let latestExtractedText = extractedText;
-    let latestTranslatedText = translatedText;
-    let latestChunk = startingChunk;
+    let latestTranslatedText = startingChunk > 0 ? translatedText : '';
+    let latestExtractionComplete = extractionComplete;
+    let latestProgress = createTranslationProgress(startingChunk);
     let latestTotalChunks = totalChunks;
     let latestTranslationStyle = startingChunk === 0 ? null : translationStyle;
     let latestGlossary = startingChunk === 0 ? '無' : glossary;
     let latestCharacterMap = startingChunk === 0 ? '' : characterMap;
     let latestPlotSummary = startingChunk === 0 ? '' : plotSummary;
+    let latestNovelContinuity = startingChunk === 0
+      ? { ...EMPTY_NOVEL_CONTINUITY, entities: [], timeline: [] }
+      : normalizeNovelContinuity(novelContinuity);
     let latestEffectiveDocumentType = startingChunk === 0 ? null : resolvedDocumentType;
+    let chunkMemoryCheckpoint: {
+      glossary: string;
+      characters: string;
+      summary: string;
+      novel: NovelContinuityMemory;
+    } | null = null;
 
     try {
       throwIfAborted(translationController.signal);
@@ -592,6 +638,8 @@ export default function App() {
           author: authorName,
           coverImage: coverImage,
           extractedText: extracted,
+          extractionComplete: latestExtractionComplete,
+          splitTranslation,
           translatedText: translated,
           currentChunk: current,
           totalChunks: total,
@@ -605,6 +653,9 @@ export default function App() {
           documentType,
           effectiveDocumentType: latestEffectiveDocumentType || undefined,
           chapterProofreading,
+          novelContinuity: latestNovelContinuity,
+          usageSnapshot: getUsageSnapshot(),
+          budgetUsd: translationBudgetUsd,
         };
         try {
           await saveHistory(record, { prune: pruneHistory });
@@ -623,7 +674,7 @@ export default function App() {
       let fullMarkdown = '';
       const isMd = file?.name?.toLowerCase().endsWith('.md');
       
-      if (isMd || extractedText) {
+      if (isMd || (extractedText && extractionComplete)) {
         fullMarkdown = extractedText;
       } else if (currentChunk === 0 && file) {
         const arrayBuffer = await file.arrayBuffer();
@@ -681,7 +732,8 @@ export default function App() {
                       systemInstruction,
                       promptText,
                       base64Pdf: hasRawText ? undefined : base64,
-                      temperature: 0.1
+                      temperature: 0.1,
+                      maxOutputTokens: 8_192,
                     });
                     if (translationCancelledRef.current) throw new Error('PDF 處理已取消');
                     
@@ -696,12 +748,7 @@ export default function App() {
                     reportWarning('pdf_extraction_chunk_failed', { chunk: index + 1, attempt: retries + 1 });
                     retries++;
                     if (retries >= MAX_RETRIES) {
-                      if (index === totalExtractionChunks - 1 && !hasRawText) {
-                        results[index] = "";
-                        success = true;
-                      } else {
-                        throw err;
-                      }
+                      throw err;
                     }
                     await abortableDelay(1000 * retries, translationController.signal);
                   }
@@ -710,7 +757,6 @@ export default function App() {
                 completedExtractions++;
                 setCurrentChunk(completedExtractions);
                 setStatusMessage(`正在提取文字 (已完成 ${completedExtractions}/${totalExtractionChunks} 部分)...`);
-                latestChunk = completedExtractions;
                 latestTotalChunks = totalExtractionChunks;
                 latestExtractedText = results.filter(r => r !== undefined).join('\n\n');
                 setExtractedText(latestExtractedText);
@@ -757,6 +803,8 @@ export default function App() {
         latestExtractedText = fullMarkdown;
         setExtractedText(fullMarkdown);
       }
+      latestExtractionComplete = true;
+      setExtractionComplete(true);
 
       // --- STAGE 1.5: GLOSSARY GENERATION & STYLE ANALYSIS ---
       let glossaryText = glossary;
@@ -775,6 +823,7 @@ export default function App() {
             model: selectedModel,
             promptText: buildDocumentAnalysisPrompt(fullMarkdown),
             temperature: 0,
+            maxOutputTokens: 4_096,
             jsonSchema: DOCUMENT_ANALYSIS_SCHEMA,
           });
           if (analysisResponse.usageMetadata) {
@@ -794,6 +843,8 @@ export default function App() {
           latestTranslationStyle = detectedStyle;
           latestGlossary = glossaryText;
           latestCharacterMap = detectedCharacters;
+          latestNovelContinuity = seedNovelContinuity(detectedCharacters);
+          setNovelContinuity(latestNovelContinuity);
         } catch (err) {
           if (err instanceof TranslationBudgetExceededError || isAbortError(err)) throw err;
           reportWarning('document_analysis_failed');
@@ -810,11 +861,14 @@ export default function App() {
       // headings, tables, and fenced code are not split by raw character count.
       const textChunks = splitTranslation ? splitMarkdownIntoTokenChunks(fullMarkdown, 1800) : [fullMarkdown];
       const translationChunksCount = textChunks.length;
+      if (startingChunk > 0 && translationChunksCount !== totalChunks) {
+        throw new Error('文件分段設定與已保存進度不同，請恢復原分段設定後再繼續。');
+      }
       latestTotalChunks = translationChunksCount;
       setTotalChunks(translationChunksCount);
       
-      let fullTranslatedText = translatedText; // Start with what we already have
-      let previousTranslatedText = translatedText.slice(-1000);
+      let fullTranslatedText = latestTranslatedText;
+      let previousTranslatedText = latestTranslatedText.slice(-1000);
       
       // Start from the current chunk if resuming
       const startChunk = startingChunk;
@@ -822,10 +876,18 @@ export default function App() {
       let dynamicGlossary = glossaryText;
       let dynamicCharacterMap = detectedCharacters;
       let layeredMemory = createLayeredDocumentMemory(globalSummary, startChunk > 0 ? plotSummary : '');
-      let dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
       const effectiveDocumentType = resolveDocumentType(documentType, detectedDocumentType);
       latestEffectiveDocumentType = effectiveDocumentType;
       setResolvedDocumentType(effectiveDocumentType);
+      if (effectiveDocumentType === 'novel' && latestNovelContinuity.entities.length === 0) {
+        latestNovelContinuity = seedNovelContinuity(dynamicCharacterMap, startChunk);
+        setNovelContinuity(latestNovelContinuity);
+      }
+      const formatWorkingMemory = () => [
+        formatLayeredDocumentMemory(layeredMemory),
+        effectiveDocumentType === 'novel' ? formatNovelContinuity(latestNovelContinuity) : '',
+      ].filter(Boolean).join('\n\n');
+      let dynamicPlotSummary = formatWorkingMemory();
       const documentTypeInstruction = getDocumentTypeInstruction(effectiveDocumentType);
       let chapterSourceChunks: string[] = [];
       let chapterTranslatedChunks: string[] = [];
@@ -836,7 +898,13 @@ export default function App() {
 
       for (let i = startChunk; i < translationChunksCount; i++) {
         throwIfAborted(translationController.signal);
-        latestChunk = i + 1;
+        chunkMemoryCheckpoint = {
+          glossary: latestGlossary,
+          characters: latestCharacterMap,
+          summary: latestPlotSummary,
+          novel: latestNovelContinuity,
+        };
+        latestProgress = beginTranslationChunk(latestProgress, i);
         setCurrentChunk(i + 1);
         setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
         const result = await translateChunkWithQuality({
@@ -878,10 +946,29 @@ export default function App() {
         }
         if (result.chunkSummary) {
           layeredMemory = updateLayeredDocumentMemory(layeredMemory, result.chunkSummary, textChunks[i]);
-          dynamicPlotSummary = formatLayeredDocumentMemory(layeredMemory);
-          setPlotSummary(dynamicPlotSummary);
-          latestPlotSummary = dynamicPlotSummary;
+          latestPlotSummary = formatLayeredDocumentMemory(layeredMemory);
+          setPlotSummary(latestPlotSummary);
         }
+        if (effectiveDocumentType === 'novel') {
+          const continuityUpdate = mergeNovelContinuity(latestNovelContinuity, {
+            characterLines: result.newCharacters,
+            chunk: i + 1,
+            chunkSummary: result.chunkSummary,
+            sourceChunk: textChunks[i],
+          });
+          latestNovelContinuity = continuityUpdate.memory;
+          setNovelContinuity(latestNovelContinuity);
+          dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, getNovelCanonicalGlossary(latestNovelContinuity));
+          latestGlossary = dynamicGlossary;
+          setGlossary(dynamicGlossary);
+          if (continuityUpdate.conflicts.length) {
+            reportWarning('novel_continuity_conflict', {
+              chunk: i + 1,
+              count: continuityUpdate.conflicts.length,
+            });
+          }
+        }
+        dynamicPlotSummary = formatWorkingMemory();
 
         fullTranslatedText += currentChunkTranslated + '\n\n';
         if (chapterProofreading) {
@@ -917,9 +1004,13 @@ export default function App() {
                 documentType: effectiveDocumentType,
                 style: detectedStyle,
                 glossary: dynamicGlossary,
-                characterMap: dynamicCharacterMap,
+                characterMap: [
+                  dynamicCharacterMap,
+                  effectiveDocumentType === 'novel' ? formatNovelContinuity(latestNovelContinuity) : '',
+                ].filter(Boolean).join('\n\n'),
               }),
               temperature: 0,
+              maxOutputTokens: 16_384,
               jsonSchema: CHAPTER_PROOFREADING_SCHEMA,
             });
             if (reviewResponse.usageMetadata) recordUsage(reviewResponse.usageMetadata, selectedModel, translationBudgetUsd);
@@ -937,6 +1028,19 @@ export default function App() {
             setCharacterMap(dynamicCharacterMap);
             latestGlossary = dynamicGlossary;
             latestCharacterMap = dynamicCharacterMap;
+            if (effectiveDocumentType === 'novel') {
+              const continuityUpdate = mergeNovelContinuity(latestNovelContinuity, {
+                characterLines: review.newCharacters,
+                chunk: i + 1,
+                sourceChunk: sourceChapter,
+              });
+              latestNovelContinuity = continuityUpdate.memory;
+              setNovelContinuity(latestNovelContinuity);
+              dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, getNovelCanonicalGlossary(latestNovelContinuity));
+              latestGlossary = dynamicGlossary;
+              setGlossary(dynamicGlossary);
+              dynamicPlotSummary = formatWorkingMemory();
+            }
           } catch (reviewError) {
             if (reviewError instanceof TranslationBudgetExceededError || isAbortError(reviewError)) throw reviewError;
             reportWarning('chapter_proofreading_failed', { chunk: i + 1 });
@@ -953,6 +1057,8 @@ export default function App() {
         }
 
         latestTranslatedText = fullTranslatedText;
+        latestProgress = commitTranslationChunk(latestProgress, i);
+        chunkMemoryCheckpoint = null;
         setTranslatedText(fullTranslatedText);
         previousTranslatedText = currentChunkTranslated.slice(-1000); // Keep last 1000 chars for context
         previousSourceText = textChunks[i].slice(-1000);
@@ -968,7 +1074,7 @@ export default function App() {
             detectedStyle,
             dynamicGlossary,
             dynamicCharacterMap,
-            dynamicPlotSummary,
+            latestPlotSummary,
             i === 0,
           );
         }
@@ -997,7 +1103,7 @@ export default function App() {
         detectedStyle,
         dynamicGlossary,
         dynamicCharacterMap,
-        dynamicPlotSummary,
+        latestPlotSummary,
       );
       
       if (fullTranslatedText && autoDownload !== 'none') {
@@ -1006,6 +1112,17 @@ export default function App() {
       translationMachine.transition('completed', '');
       
     } catch (err: any) {
+      if (chunkMemoryCheckpoint) {
+        latestGlossary = chunkMemoryCheckpoint.glossary;
+        latestCharacterMap = chunkMemoryCheckpoint.characters;
+        latestPlotSummary = chunkMemoryCheckpoint.summary;
+        latestNovelContinuity = chunkMemoryCheckpoint.novel;
+      }
+      setTranslatedText(latestTranslatedText);
+      setGlossary(latestGlossary);
+      setCharacterMap(latestCharacterMap);
+      setPlotSummary(latestPlotSummary);
+      setNovelContinuity(latestNovelContinuity);
       const wasCancelled = translationCancelledRef.current || isAbortError(err);
       const budgetExceeded = err instanceof TranslationBudgetExceededError;
       if (wasCancelled) {
@@ -1020,6 +1137,11 @@ export default function App() {
         reportError('translation_failed');
         setError(`翻譯失敗 (Translation failed): ${err.message}`);
       }
+      const resumableProgress = pauseTranslationProgress(latestProgress);
+      setCurrentChunk(resumableProgress.completedChunks);
+      if (!latestExtractionComplete) {
+        setError('PDF 擷取尚未完成，已保留部分文字與已發生費用。可在本頁重試；重新載入紀錄後需重新上傳原始 PDF。');
+      }
       if (fileId) {
         const record: HistoryRecord = {
           id: fileId,
@@ -1027,8 +1149,10 @@ export default function App() {
           author: authorName,
           coverImage: coverImage,
           extractedText: latestExtractedText,
+          extractionComplete: latestExtractionComplete,
+          splitTranslation,
           translatedText: latestTranslatedText,
-          currentChunk: latestChunk,
+          currentChunk: resumableProgress.completedChunks,
           totalChunks: latestTotalChunks,
           status: wasCancelled || budgetExceeded ? 'translating' : 'error',
           timestamp: Date.now(),
@@ -1040,6 +1164,9 @@ export default function App() {
           documentType,
           effectiveDocumentType: latestEffectiveDocumentType || undefined,
           chapterProofreading,
+          novelContinuity: latestNovelContinuity,
+          usageSnapshot: getUsageSnapshot(),
+          budgetUsd: translationBudgetUsd,
         };
         try {
           await saveHistory(record);
@@ -1140,7 +1267,11 @@ export default function App() {
   // estimated billable pipeline tokens so the UI does not mislabel a multiplier
   // as the source document size.
   const estimatedCost = estimatePipelineCost(selectedModelData, tokenCount ?? 0);
-  const totalEstimatedCost = estimatedCost.totalUsd;
+  const remainingEstimateRatio = totalChunks > 0 ? Math.max(0, totalChunks - currentChunk) / totalChunks : 1;
+  const remainingEstimatedCost = estimatePipelineCost(
+    selectedModelData,
+    Math.round((tokenCount ?? 0) * remainingEstimateRatio),
+  );
   const actualUsage = {
     inputTokens: actualInputTokens,
     cachedInputTokens: actualCachedInputTokens,
@@ -1152,70 +1283,15 @@ export default function App() {
     <div className="app-shell min-h-screen bg-slate-950 text-slate-100 font-sans">
       <AppToast toast={toast} onClose={() => setToast(null)} />
 
-      <header className="app-header bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-10 print:hidden">
-        {isIframe && (
-          <div className="bg-amber-950/30 border-b border-amber-900/50 px-4 py-2.5 sm:px-6 lg:px-8 flex items-start sm:items-center justify-between gap-4">
-            <div className="flex items-start sm:items-center gap-2 text-amber-500 text-sm">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" />
-              <p>
-                <strong>內嵌模式限制：</strong> 受限於瀏覽器的安全機制，<strong className="font-semibold">複製與下載功能可能會失效</strong>。請在新分頁開啟以獲得完整功能。
-              </p>
-            </div>
-            <a 
-              href={window.location.href} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-900/50 hover:bg-amber-800/50 text-amber-400 rounded-lg text-xs font-medium transition-colors border border-amber-700/30"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              在新分頁開啟
-            </a>
-          </div>
-        )}
-        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="brand-mark bg-blue-600/20 border border-blue-500/30 p-2.5 rounded-xl">
-              <FileText className="w-5 h-5 text-blue-400" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight text-slate-100">PDF 翻譯工作台</h1>
-              <p className="text-[11px] text-slate-500 mt-0.5">清楚、安心地完成每一份翻譯</p>
-            </div>
-          </div>
-          <div className="header-actions flex items-center gap-2">
-            <button
-              onClick={() => setShowInfoModal(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
-            >
-              <Info className="w-4 h-4" />
-              <span className="hidden sm:inline">使用說明</span>
-            </button>
-            <button
-              onClick={() => setShowKeyModal(true)}
-              data-testid="api-key-button"
-              className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
-            >
-              <Key className="w-4 h-4" />
-              <span className="hidden sm:inline">API Key</span>
-            </button>
-            <button
-              onClick={() => setShowHistory(true)}
-              data-testid="history-button"
-              className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner"
-            >
-              <History className="w-4 h-4" />
-              <span className="hidden sm:inline">歷史紀錄</span>
-            </button>
-            {((selectedModelData.provider === 'google' && isManualKeyActive) ||
-              (selectedModelData.provider === 'openai' && isOpenaiKeyActive)) && (
-              <div className="text-sm text-slate-400 flex items-center gap-1.5 bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full shadow-inner hidden sm:flex">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                已綁定 API Key
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
+      <WorkspaceHeader
+        isIframe={isIframe}
+        provider={selectedModelData.provider}
+        hasGoogleKey={isManualKeyActive}
+        hasOpenaiKey={isOpenaiKeyActive}
+        onShowInfo={() => setShowInfoModal(true)}
+        onShowKeys={() => setShowKeyModal(true)}
+        onShowHistory={() => setShowHistory(true)}
+      />
 
       <main className="app-main max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 print:p-0 print:m-0 print:max-w-none">
         <div className="workspace-intro mb-7 print:hidden">
@@ -1252,8 +1328,9 @@ export default function App() {
                 selectedModelData={selectedModelData}
                 disabled={isTranslating}
                 budgetUsd={translationBudgetUsd}
+                spentUsd={actualCost.totalUsd}
                 retryLimit={translationRetryLimit}
-                estimatedUsd={totalEstimatedCost}
+                estimatedUsd={remainingEstimatedCost.totalUsd}
                 onModelChange={setSelectedModel}
                 onBudgetChange={setTranslationBudgetUsd}
                 onRetryLimitChange={setTranslationRetryLimit}
@@ -1377,7 +1454,7 @@ export default function App() {
                 </div>
               </details>
 
-              {activeTab === 'translate' && file && (
+              {activeTab === 'translate' && (file || extractedText) && (
                 <TranslationCostSummary
                   isCalculating={isCalculating}
                   documentTokens={tokenCount}
@@ -1437,194 +1514,42 @@ export default function App() {
               </div>
             )}
 
-            <div className="app-card action-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
-              <div className="section-heading">
-                <div className="step-badge">
-                  {activeTab === 'translate' ? '4' : '3'}
-                </div>
-                <div><h2 className="text-lg font-semibold text-slate-200">{activeTab === 'translate' ? '準備開始' : '準備轉換'}</h2><p className="text-xs text-slate-500 mt-0.5">確認設定後即可執行</p></div>
-              </div>
-              
-              {activeTab === 'translate' ? (
-                <div className="space-y-2.5">
-                  <button
-                    onClick={handleTranslate}
-                    disabled={(!file && !extractedText) || isCalculating || isTranslating || isExtracting}
-                    className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
-                  >
-                    {isTranslating ? (
-                      <>
-                        <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-                        <span className="text-white">{statusMessage ? statusMessage : (totalChunks > 0 ? `翻譯中 (第 ${currentChunk}/${totalChunks} 部分)...` : '準備中...')}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-5 h-5" />
-                        確認翻譯
-                      </>
-                    )}
-                  </button>
-                  {isTranslating && (
-                    <button
-                      type="button"
-                      onClick={handleCancelTranslation}
-                      className="w-full py-2.5 px-4 border border-slate-700 bg-white text-slate-500 hover:text-red-500 hover:border-red-300 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors"
-                    >
-                      <X className="w-4 h-4" />
-                      停止並保留進度
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <button
-                  onClick={handlePdfToEpub}
-                  disabled={!file || isExtracting || isTranslating}
-                  className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(37,99,235,0.3)] hover:shadow-[0_0_20px_rgba(37,99,235,0.5)] border border-blue-400/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
-                >
-                  {isExtracting ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-                      <span className="text-white">{statusMessage || '轉換中...'}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Book className="w-5 h-5" />
-                      轉換並下載 EPUB
-                    </>
-                  )}
-                </button>
-              )}
-
-              {activeTab === 'translate' && isTranslating && totalChunks > 0 && (
-                <div className="mt-6 space-y-3">
-                  <div className="flex justify-between text-sm font-semibold text-slate-400">
-                    <span>
-                      {translationStage === 'extracting' ? `提取文字進度: ${Math.round((currentChunk / totalChunks) * 100)}%` : 
-                       translationStage === 'analyzing' ? '正在分析文本風格...' : 
-                       `翻譯進度: ${Math.round((currentChunk / totalChunks) * 100)}%`}
-                    </span>
-                    {estimatedRemainingTime !== null && translationStage === 'translating' && (
-                      <span className="text-blue-400">
-                        預計剩餘: {Math.floor(estimatedRemainingTime / 60)} 分 {estimatedRemainingTime % 60} 秒
-                      </span>
-                    )}
-                  </div>
-                  <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden shadow-inner border border-slate-800">
-                    <div 
-                      className="bg-blue-500 h-full transition-all duration-500 ease-out relative shadow-[0_0_10px_rgba(59,130,246,0.8)]"
-                      style={{ width: `${(currentChunk / totalChunks) * 100}%` }}
-                    >
-                      <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
-                    </div>
-                  </div>
-                  
-                  {translationStyle && (
-                    <div className="mt-4 p-3 bg-indigo-950/30 border border-indigo-900/50 text-indigo-300 rounded-lg text-sm flex items-start gap-2">
-                      <FileText className="w-5 h-5 shrink-0 mt-0.5 text-indigo-400" />
-                      <div className="flex-1 overflow-hidden">
-                        <div className="font-semibold text-indigo-200 mb-1">AI 偵測翻譯風格：</div>
-                        <div className="prose prose-sm prose-invert max-w-none">
-                          <Suspense fallback={markdownFallback}><MarkdownPreview>{translationStyle}</MarkdownPreview></Suspense>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-              
-              {error && (
-                <div className="mt-4 p-3 bg-red-950/30 border border-red-900/50 text-red-400 rounded-lg text-sm flex items-start gap-2">
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="break-words whitespace-pre-wrap">{error}</p>
-                  </div>
-                </div>
-              )}
-            </div>
+            <TranslationActionPanel
+              activeTab={activeTab}
+              canTranslate={activeTab === 'translate' ? Boolean(file || extractedText) : Boolean(file)}
+              isCalculating={isCalculating}
+              isTranslating={isTranslating}
+              isExtracting={isExtracting}
+              statusMessage={statusMessage}
+              totalChunks={totalChunks}
+              currentChunk={currentChunk}
+              translationStage={translationStage}
+              estimatedRemainingTime={estimatedRemainingTime}
+              translationStyle={translationStyle}
+              error={error}
+              onTranslate={handleTranslate}
+              onCancel={handleCancelTranslation}
+              onConvert={handlePdfToEpub}
+            />
 
           </div>
 
-          <div className="result-column lg:col-span-7 xl:col-span-8 print:block print:w-full">
-            <div className="result-panel bg-slate-900 rounded-2xl shadow-lg shadow-black/20 border border-slate-800 h-full min-h-[680px] flex flex-col overflow-hidden print:border-none print:shadow-none print:h-auto print:min-h-0 print:rounded-none print:block">
-              <div className="result-toolbar px-5 sm:px-6 py-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/50 print:hidden">
-                <h2 className="text-lg font-medium flex items-center gap-2 text-slate-200">
-                  <span className="result-status-dot"></span>
-                  {activeTab === 'translate' ? '翻譯預覽' : '文字預覽'}
-                </h2>
-                
-                <div className="result-actions flex items-center gap-2 overflow-x-auto max-w-full">
-                  <button
-                    onClick={handleCopyText}
-                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isCopying}
-                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                  >
-                    {isCopying ? <Loader2 className="w-4 h-4 animate-spin text-blue-400" /> : <Copy className="w-4 h-4" />}
-                    複製全文
-                  </button>
-                  <button
-                    onClick={() => downloadEpub()}
-                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isTranslating || isDownloadingEpub || isExtracting}
-                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                  >
-                    {isDownloadingEpub ? <Loader2 className="w-4 h-4 animate-spin text-blue-400" /> : <Book className="w-4 h-4" />}
-                    下載 EPUB
-                  </button>
-                  <button
-                    onClick={handleDownloadMarkdown}
-                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isTranslating}
-                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                  >
-                    <FileText className="w-4 h-4" />
-                    下載 MD
-                  </button>
-                  <button
-                    onClick={downloadPdf}
-                    disabled={!(activeTab === 'translate' ? translatedText : extractedText) || isTranslating || isDownloadingPdf}
-                    className="py-2 px-4 bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 rounded-lg text-sm font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                  >
-                    {isDownloadingPdf ? <Loader2 className="w-4 h-4 animate-spin text-blue-400" /> : <Download className="w-4 h-4" />}
-                    下載 PDF
-                  </button>
-                </div>
-              </div>
-              
-              <div className="flex-1 p-6 overflow-auto bg-slate-900 print:overflow-visible print:p-0">
-                {(activeTab === 'translate' ? !translatedText : !extractedText) && !isTranslating && !isExtracting ? (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4">
-                    {activeTab === 'translate' ? (
-                      <>
-                        <FileText className="w-16 h-16 opacity-20" />
-                        <p>翻譯結果將顯示於此</p>
-                      </>
-                    ) : (
-                      <>
-                        <Book className="w-16 h-16 opacity-20" />
-                        <p>上傳檔案並點擊「轉換並下載 EPUB」按鈕</p>
-                        <p className="text-sm text-slate-500">轉換完成後將自動下載 EPUB 檔案，並在此預覽提取的文字</p>
-                      </>
-                    )}
-                  </div>
-                ) : isExtracting && !extractedText ? (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4">
-                    <Loader2 className="w-16 h-16 animate-spin text-blue-500 opacity-80" />
-                    <p className="text-slate-400">{statusMessage || '正在處理您的文件...'}</p>
-                  </div>
-                ) : (
-                  <div id="translation-result-content" className="prose prose-invert max-w-none prose-headings:font-semibold prose-a:text-blue-400">
-                    <Suspense fallback={markdownFallback}>
-                      <MarkdownPreview>{activeTab === 'translate' ? (translationStage === 'extracting' || translationStage === 'analyzing' ? extractedText : translatedText) : extractedText}</MarkdownPreview>
-                    </Suspense>
-                    {(isTranslating || isExtracting) && (
-                      <div className="mt-4 flex items-center text-slate-400 text-sm">
-                        <Loader2 className="w-4 h-4 animate-spin mr-2 text-blue-500" />
-                        {statusMessage || '處理中...'}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <DocumentResultPanel
+            activeTab={activeTab}
+            translatedText={translatedText}
+            extractedText={extractedText}
+            isTranslating={isTranslating}
+            isExtracting={isExtracting}
+            isCopying={isCopying}
+            isDownloadingEpub={isDownloadingEpub}
+            isDownloadingPdf={isDownloadingPdf}
+            statusMessage={statusMessage}
+            translationStage={translationStage}
+            onCopy={handleCopyText}
+            onDownloadEpub={() => downloadEpub()}
+            onDownloadMarkdown={handleDownloadMarkdown}
+            onDownloadPdf={downloadPdf}
+          />
 
         </div>
       </main>
