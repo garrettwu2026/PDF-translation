@@ -165,3 +165,11 @@ The functional workflow remains unchanged.
 - `completedCostChunks` 只在整段提交後增加；進行中段落的已計費抵扣不得消耗其他段落預算。
 - 歷史可選欄位 `costSamples` 保存最多 12 個合格樣本；`usageSnapshot.breakdown` 保存階段／模型成本。舊紀錄金額保持原值並列為未分類。
 - 估算假設、校正權重及限制詳見 `docs/COST_ESTIMATION.md`。未更改模型定價、品質檢查或推理設定。
+
+## 2026-09-03 工作台職責拆分
+
+- `src/App.tsx` 從 1,575 行縮為 285 行，只負責畫面組裝；`src/hooks/useTranslationWorkspace.ts` 協調文件狀態、歷史、翻譯提交／回滾與各子 hook。
+- 金鑰設定、原文 token 估算、成本預測及文件轉換分別由 `useApiKeySettings`、`useSourceTokenEstimate`、`useDocumentCostForecast`、`useDocumentConverter` 管理；既有 `useTranslationMachine` 仍是執行狀態機。
+- `src/lib/extract-translation-pdf.ts` 處理 request-scoped Worker／AI 擷取與 ACK、取消清理；`src/lib/review-translated-chapter.ts` 處理章節校稿的保護內容、用量回報及完整性驗證，兩者透過注入 callback 測試，不依賴 React。
+- `EpubMetadataSettings` 負責 EPUB 作者／封面設定。既有 UI、模型、定價、品質規則、歷史 schema 及下載流程保持不變。
+- 協調 hook 仍約 984 行；下一步若繼續重構，可拆歷史還原／快照與翻譯交易協調，不能僅因移出 App 就視為所有複雜度已消除。

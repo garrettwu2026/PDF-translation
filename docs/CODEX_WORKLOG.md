@@ -184,3 +184,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - 持久化階段／模型帳本並維持舊紀錄費用；重試與一次性語意複審分開列帳，推理 token 不重複計價。
 - 更新成本面板與開始前預算估算。新增估算、提示詞成長、五頁擷取批次、取樣分析、混合模型、校正、暫停、舊帳本回歸測試，並強化重試流程列帳檢查。
 - 驗證：TypeScript、全部 111 項測試及正式 Vite build 通過。Browser 上傳合成 Markdown，確認原文 tokens 不隨模型改變、費用重新計算，並在 Luna 翻譯的明細列出 Terra 複審。本機正式伺服器 /api/health 回傳 ok；未呼叫付費翻譯 API。一般開發伺服器受 Windows 沙箱設定載入限制，改用正式建置驗證。
+
+## 2026-09-03 — App 畫面與工作台流程解耦
+
+- 將 App.tsx 從 1,575 行縮為 285 行，畫面組裝與約 984 行的 useTranslationWorkspace 協調邏輯分離。
+- 新增金鑰設定、token 估算、成本預測、文件轉換 hook，以及 EPUB 作者／封面設定元件；沿用原本欄位、處理規則及介面。
+- 抽出可獨立測試的 PDF 擷取與章節校稿服務，保留 request ID、用量先計入、ACK backpressure、輸出上限、重試及品質檢查順序。
+- 擷取取消可立即結束等待，忽略過期回應；Worker 啟動／取消失敗仍移除監聽器並回報原始錯誤。
+- 新增九項回歸測試，涵蓋 native／OCR 路由、過期任務、失敗批次、費用上限、取消、Worker 清理、章節保護內容與失敗仍計費。
+- 驗證：使用 bundled Node 執行 npm run check 等效的 TypeScript、全部 120 項測試及正式 Vite build，全部通過。
+- Browser 技能用於本機介面回歸：合成 Markdown 上傳、26-token 估算及模型切換重算、EPUB 作者設定、轉換器預覽、API／歷史視窗開關，無 console error；未讀取金鑰或呼叫付費翻譯 API。未執行整本書的真實模型端到端翻譯。
