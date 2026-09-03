@@ -138,6 +138,8 @@ test('a chunk retry does not pay for semantic review more than once', async () =
   const wrong = `${annotated.segments[0].marker}部署後會套用暫存規則。`;
   const corrected = `${annotated.segments[0].marker}部署後會套用快取策略。`;
   const models: string[] = [];
+  const billed: string[] = [];
+  const usageMetadata = { promptTokenCount: 10, candidatesTokenCount: 10 };
   let correctionCalls = 0;
   const result = await translateChunkWithQuality({
     sourceText: source,
@@ -155,10 +157,10 @@ test('a chunk retry does not pay for semantic review more than once', async () =
     documentTypeInstruction: '技術文件',
     documentType: 'technical',
     signal: new AbortController().signal,
-    generateStream: async function* () { yield { text: wrong }; },
+    generateStream: async function* () { yield { text: wrong, usageMetadata }; },
     generate: async ({ model }) => {
       models.push(model);
-      if (model === 'gpt-5.6-terra') return { text: '{"revisions":[]}' };
+      if (model === 'gpt-5.6-terra') return { text: '{"revisions":[]}', usageMetadata };
       correctionCalls++;
       return { text: JSON.stringify({
         correctedTranslation: correctionCalls === 1 ? wrong : corrected,
@@ -168,13 +170,15 @@ test('a chunk retry does not pay for semantic review more than once', async () =
         foundHallucinations: false,
         missingContentDetected: false,
         missingSentenceIds: [],
-      }) };
+      }), usageMetadata };
     },
-    onUsage: () => undefined,
+    onUsage: (_usage, model, stage) => { billed.push(`${stage}:${model}`); },
     onPreview: () => undefined,
     onStage: () => undefined,
   });
   assert.equal(models.filter((model) => model === 'gpt-5.6-terra').length, 1);
   assert.equal(correctionCalls, 2);
+  assert.deepEqual(billed, ['draft:gpt-5.6-luna', 'correction:gpt-5.6-luna',
+    'semantic_review:gpt-5.6-terra', 'retry:gpt-5.6-luna', 'retry:gpt-5.6-luna']);
   assert.equal(result.translatedText, '部署後會套用快取策略。');
 });

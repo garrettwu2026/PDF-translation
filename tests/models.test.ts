@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { calculateTokenCost, estimatePipelineCost, getModelCatalogStatus, getModelConfig, getQualityReviewModelId, getTemperatureConfig } from '../src/lib/models.ts';
+import { calculateTokenCost, getModelCatalogStatus, getModelConfig, getQualityReviewModelId, getTemperatureConfig } from '../src/lib/models.ts';
 
 test('model lookup falls back to the default model', () => {
   assert.equal(getModelConfig('missing-model').id, 'gemini-3.7-flash');
@@ -41,12 +41,6 @@ test('token cost calculation discounts cached input without double-counting it',
   assert.ok(Math.abs(cost.inputUsd - 0.164) < Number.EPSILON);
   assert.equal(cost.outputUsd, 0.6);
   assert.ok(Math.abs(cost.totalUsd - 0.764) < Number.EPSILON);
-});
-
-test('pipeline estimate keeps document and billable token counts separate', () => {
-  const estimate = estimatePipelineCost(getModelConfig('gemini-3.7-flash'), 1_000);
-  assert.equal(estimate.inputTokens, 4_000);
-  assert.equal(estimate.outputTokens, 2_500);
 });
 
 test('catalog status reminds maintainers when routine or promotional review is due', () => {

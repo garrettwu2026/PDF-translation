@@ -1,6 +1,7 @@
 import type { UsageMetadata } from './ai-providers';
 import { calculateTokenCost, type ModelConfig, USD_TO_TWD } from './models.ts';
 import { estimateTextTokens } from './text.ts';
+import { COST_STAGE_LABELS, type CostBreakdown, type CostStage } from './cost-forecast.ts';
 
 export const DEFAULT_TRANSLATION_BUDGET_USD = 5;
 export const DEFAULT_TRANSLATION_RETRY_LIMIT = 3;
@@ -25,6 +26,7 @@ export type TranslationUsageSnapshot = {
   reasoningTokens: number;
   inputUsd: number;
   outputUsd: number;
+  breakdown?: CostBreakdown[];
 };
 
 export type RequestBudgetEstimate = {
@@ -84,6 +86,7 @@ export const estimateRequestBudget = (input: {
 });
 
 export class TranslationUsageMeter {
+  private breakdown: CostBreakdown[] = [];
   inputTokens = 0;
   cachedInputTokens = 0;
   cacheWriteInputTokens = 0;
@@ -106,10 +109,23 @@ export class TranslationUsageMeter {
     this.itemizedInputUsd = value.inputUsd;
     this.itemizedOutputUsd = value.outputUsd;
     this.hasItemizedCost = value.inputUsd > 0 || value.outputUsd > 0;
+    this.breakdown = (Array.isArray(snapshot?.breakdown) ? snapshot.breakdown : []).filter(row => row
+      && Object.hasOwn(COST_STAGE_LABELS, row.stage) && typeof row.model === 'string'
+      && [row.inputTokens, row.outputTokens, row.reasoningTokens, row.inputUsd, row.outputUsd]
+        .every(n => Number.isFinite(n) && n >= 0)).slice(0, 100).map(row => ({ ...row }));
+    // Legacy totals stay authoritative. Never invent their stage or current-model price.
+    const classifiedInput = this.breakdown.reduce((s, r) => s + r.inputUsd, 0);
+    const classifiedOutput = this.breakdown.reduce((s, r) => s + r.outputUsd, 0);
+    if (classifiedInput > value.inputUsd + 1e-9 || classifiedOutput > value.outputUsd + 1e-9) this.breakdown = [];
+    const inputUsd = value.inputUsd - this.breakdown.reduce((s, r) => s + r.inputUsd, 0);
+    const outputUsd = value.outputUsd - this.breakdown.reduce((s, r) => s + r.outputUsd, 0);
+    if (inputUsd > 1e-9 || outputUsd > 1e-9) this.breakdown.push({ stage: 'legacy', model: 'unknown',
+      inputTokens: 0, outputTokens: 0, reasoningTokens: 0, inputUsd: Math.max(0, inputUsd), outputUsd: Math.max(0, outputUsd) });
     return this.snapshot();
   }
 
   reset() {
+    this.breakdown = [];
     this.inputTokens = 0;
     this.cachedInputTokens = 0;
     this.cacheWriteInputTokens = 0;
@@ -120,7 +136,7 @@ export class TranslationUsageMeter {
     this.hasItemizedCost = false;
   }
 
-  add(usage?: UsageMetadata, model?: ModelConfig) {
+  add(usage?: UsageMetadata, model?: ModelConfig, stage: CostStage = 'legacy') {
     const inputTokens = Math.max(0, usage?.promptTokenCount ?? 0);
     const cachedInputTokens = Math.min(inputTokens, Math.max(0, usage?.cachedPromptTokenCount ?? 0));
     const cacheWriteInputTokens = Math.min(
@@ -142,6 +158,16 @@ export class TranslationUsageMeter {
       this.itemizedInputUsd += incrementalCost.inputUsd;
       this.itemizedOutputUsd += incrementalCost.outputUsd;
       this.hasItemizedCost = true;
+      let row = this.breakdown.find(r => r.stage === stage && r.model === model.id);
+      if (!row) {
+        row = { stage, model: model.id, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, inputUsd: 0, outputUsd: 0 };
+        this.breakdown.push(row);
+      }
+      row.inputTokens += inputTokens;
+      row.outputTokens += Math.max(0, usage?.billedOutputTokenCount ?? usage?.candidatesTokenCount ?? 0);
+      row.reasoningTokens += Math.max(0, usage?.reasoningTokenCount ?? 0);
+      row.inputUsd += incrementalCost.inputUsd;
+      row.outputUsd += incrementalCost.outputUsd;
     }
     return this.totals();
   }
@@ -161,6 +187,7 @@ export class TranslationUsageMeter {
       ...this.totals(),
       inputUsd: this.itemizedInputUsd,
       outputUsd: this.itemizedOutputUsd,
+      breakdown: this.breakdown.map(row => ({ ...row })),
     };
   }
 

@@ -1,5 +1,6 @@
 import type { NovelContinuityMemory } from './novel-continuity.ts';
 import type { TranslationUsageSnapshot } from './translation-budget.ts';
+import type { CostSample } from './cost-forecast.ts';
 
 export interface HistoryRecord {
   id: string;
@@ -25,6 +26,7 @@ export interface HistoryRecord {
   novelContinuity?: NovelContinuityMemory;
   usageSnapshot?: TranslationUsageSnapshot;
   budgetUsd?: number;
+  costSamples?: CostSample[];
 }
 
 const DB_NAME = 'pdf-translator-db';
@@ -70,7 +72,8 @@ export const estimateHistoryRecordCharacters = (record: HistoryRecord) =>
   + (record.characterMap?.length ?? 0)
   + (record.plotSummary?.length ?? 0)
   + (record.novelContinuity ? JSON.stringify(record.novelContinuity).length : 0)
-  + (record.usageSnapshot ? JSON.stringify(record.usageSnapshot).length : 0);
+  + (record.usageSnapshot ? JSON.stringify(record.usageSnapshot).length : 0)
+  + (record.costSamples ? JSON.stringify(record.costSamples).length : 0);
 
 export const selectHistoryRecordsToKeep = (
   records: HistoryRecord[],

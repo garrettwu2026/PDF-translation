@@ -174,3 +174,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - Completed interruption recovery: text and memory roll back together, incurred charges stay recorded, completed runs restart with empty output, and partial PDF extraction cannot masquerade as complete input. Persist split mode and reject changed resume boundaries.
 - Validation: TypeScript check, all 100 unit tests, and production Vite build pass using the bundled Node executable (npm is not on PATH). Browser smoke checks verified budget editing to USD 10, API settings dialog, converter switching, and no console errors; no paid provider requests were made. Standalone Playwright execution was unavailable because its Chromium binary is missing.
 - Budget preflight is an estimate, not a hard billing guarantee. Legacy records cannot recover historical charges. Novel event summaries follow textual order and preserve explicit time/POV clues without inferring unknown chronology.
+
+## 2026-09-03 — 分階段預估、實測校正與成本明細
+
+- 移除原文 4x 輸入／2.5x 輸出的全流程固定倍率，改用階段／模型規劃與實際提示詞、schema、文件記憶長度。
+- 原生 PDF 與 Markdown 使用一致的文字 token 估算；掃描／稀疏頁保守標示未知，完成擷取後按實際 Markdown 重算。原生文字估算加入取消及清理處理。
+- 記錄已提交段落費用，至少三段才啟用實測混合校正；設定不同的樣本不混用，歷史最多保留 12 段。
+- 增加完成段落計數，區別正在處理的 UI 段數；進行中費用抵扣限於該段份額，失敗費用保留但不誤算成已完成。
+- 持久化階段／模型帳本並維持舊紀錄費用；重試與一次性語意複審分開列帳，推理 token 不重複計價。
+- 更新成本面板與開始前預算估算。新增估算、提示詞成長、五頁擷取批次、取樣分析、混合模型、校正、暫停、舊帳本回歸測試，並強化重試流程列帳檢查。
+- 驗證：TypeScript、全部 111 項測試及正式 Vite build 通過。Browser 上傳合成 Markdown，確認原文 tokens 不隨模型改變、費用重新計算，並在 Luna 翻譯的明細列出 Terra 複審。本機正式伺服器 /api/health 回傳 ok；未呼叫付費翻譯 API。一般開發伺服器受 Windows 沙箱設定載入限制，改用正式建置驗證。

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { UsageMetadata } from '../lib/ai-providers';
 import { getModelConfig, USD_TO_TWD } from '../lib/models';
+import type { CostBreakdown, CostStage } from '../lib/cost-forecast';
 import {
   TranslationUsageMeter,
   type RequestBudgetEstimate,
@@ -20,15 +21,18 @@ export const useTranslationUsage = () => {
   const meterRef = useRef(new TranslationUsageMeter());
   const [usageTotals, setUsageTotals] = useState(EMPTY_USAGE);
   const [actualCost, setActualCost] = useState(EMPTY_COST);
+  const [costBreakdown, setCostBreakdown] = useState<CostBreakdown[]>([]);
 
   const resetUsage = useCallback(() => {
     meterRef.current.reset();
     setUsageTotals(EMPTY_USAGE);
     setActualCost(EMPTY_COST);
+    setCostBreakdown([]);
   }, []);
 
   const restoreUsage = useCallback((snapshot?: Partial<TranslationUsageSnapshot> | null) => {
     const restored = meterRef.current.restore(snapshot);
+    setCostBreakdown(restored.breakdown ?? []);
     const totals = meterRef.current.totals();
     setUsageTotals(totals);
     const totalUsd = restored.inputUsd + restored.outputUsd;
@@ -40,9 +44,10 @@ export const useTranslationUsage = () => {
     });
   }, []);
 
-  const recordUsage = useCallback((usage: UsageMetadata | undefined, modelId: string, limitUsd: number) => {
+  const recordUsage = useCallback((usage: UsageMetadata | undefined, modelId: string, limitUsd: number, stage: CostStage = 'legacy') => {
     const model = getModelConfig(modelId);
-    const totals = meterRef.current.add(usage, model);
+    const totals = meterRef.current.add(usage, model, stage);
+    setCostBreakdown(meterRef.current.snapshot().breakdown ?? []);
     setUsageTotals(totals);
     const cost = meterRef.current.cost(model);
     setActualCost(cost);
@@ -58,6 +63,7 @@ export const useTranslationUsage = () => {
   return {
     ...usageTotals,
     actualCost,
+    costBreakdown,
     resetUsage,
     restoreUsage,
     recordUsage,

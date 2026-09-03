@@ -36,6 +36,7 @@ import {
   isRetryableProviderError,
 } from './provider-errors.ts';
 import { estimateTranslationOutputLimit, TranslationBudgetExceededError } from './translation-budget.ts';
+import type { CostStage } from './cost-forecast.ts';
 
 export type ChunkTranslationResult = {
   translatedText: string;
@@ -62,7 +63,7 @@ type ChunkTranslationOptions = {
   signal: AbortSignal;
   generate: (options: GenerateContentOptions) => Promise<ContentResult>;
   generateStream: (options: GenerateStreamOptions) => AsyncGenerator<ContentResult>;
-  onUsage: (usage: NonNullable<ContentResult['usageMetadata']>, model: string) => void;
+  onUsage: (usage: NonNullable<ContentResult['usageMetadata']>, model: string, stage: CostStage) => void;
   onPreview: (text: string) => void;
   onStage: (stage: 'translating' | 'correcting' | 'repairing' | 'semantic_review', message: string) => void;
   onWarning?: (code: string, metadata?: Record<string, string | number | boolean>) => void;
@@ -107,7 +108,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         throwIfAborted(options.signal);
         draft += chunk.text || '';
         options.onPreview(previewText(draft, protectedSource.entries));
-        if (chunk.usageMetadata) options.onUsage(chunk.usageMetadata, options.model);
+        if (chunk.usageMetadata) options.onUsage(chunk.usageMetadata, options.model, attempt > 0 ? 'retry' : 'draft');
       }
 
       const draftQuality = assessTranslationQuality(annotatedSource.text, draft, {
@@ -131,7 +132,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         jsonSchema: CORRECTION_SCHEMA,
         signal: options.signal,
       });
-      if (correctionResponse.usageMetadata) options.onUsage(correctionResponse.usageMetadata, options.model);
+      if (correctionResponse.usageMetadata) options.onUsage(correctionResponse.usageMetadata, options.model, attempt > 0 ? 'retry' : 'correction');
       const correction = parseCorrectionResult(correctionResponse.text || '{}');
       let corrected = correction.correctedTranslation || draft;
 
@@ -150,7 +151,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
           jsonSchema: SENTENCE_REPAIR_SCHEMA,
           signal: options.signal,
         });
-        if (repairResponse.usageMetadata) options.onUsage(repairResponse.usageMetadata, options.model);
+        if (repairResponse.usageMetadata) options.onUsage(repairResponse.usageMetadata, options.model, attempt > 0 ? 'retry' : 'repair');
         corrected = applySentenceRepairs(corrected, annotatedSource.segments, parseSentenceRepairs(repairResponse.text || '{}'));
       } else if (correction.missingContentDetected) {
         throw new TranslationQualityError('Model reported missing content without sentence IDs');
@@ -192,7 +193,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
             jsonSchema: SEMANTIC_REVIEW_SCHEMA,
             signal: options.signal,
           });
-          if (semanticReview.usageMetadata) options.onUsage(semanticReview.usageMetadata, reviewModel);
+          if (semanticReview.usageMetadata) options.onUsage(semanticReview.usageMetadata, reviewModel, 'semantic_review');
           const allowedIds = new Set(riskySentences.map((sentence) => sentence.id));
           corrected = applySentenceRevisions(
             corrected,

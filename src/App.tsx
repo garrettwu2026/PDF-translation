@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Book, X, Image as ImageIcon } from 'lucide-react';
 import {
   saveHistory,
@@ -10,8 +10,8 @@ import {
 } from './lib/db';
 import { estimateTextTokens, splitMarkdownIntoTokenChunks } from './lib/text';
 import { MAX_PDF_PAGES, validateUpload } from './lib/file-limits';
-import { buildDocumentAnalysisPrompt, DOCUMENT_ANALYSIS_SCHEMA, parseDocumentAnalysis } from './lib/document-analysis';
-import { DEFAULT_MODEL_ID, estimatePipelineCost, getModelConfig, MODELS } from './lib/models';
+import { buildDocumentAnalysisPrompt, DOCUMENT_ANALYSIS_SCHEMA, parseDocumentAnalysis, sampleDocumentForAnalysis } from './lib/document-analysis';
+import { DEFAULT_MODEL_ID, getModelConfig, MODELS } from './lib/models';
 import { reportError, reportWarning } from './lib/diagnostics';
 import { abortableDelay, isAbortError, throwIfAborted } from './lib/abort';
 import {
@@ -39,7 +39,9 @@ import ModelSelectionPanel from './components/ModelSelectionPanel';
 import TranslationCostSummary from './components/TranslationCostSummary';
 import { useBudgetedAiProviders } from './hooks/useBudgetedAiProviders';
 import { downloadBlob, requestEpub } from './lib/browser-exports';
-import { extractPdfText } from './lib/pdf-text-extraction';
+import { costProfile, forecastDocumentCost, normalizeCostSamples, type CostSample } from './lib/cost-forecast';
+import { estimatePromptOverheads } from './lib/cost-prompts';
+import { estimatePdfSourceTokens, extractPdfText } from './lib/pdf-text-extraction';
 import {
   createLayeredDocumentMemory,
   formatLayeredDocumentMemory,
@@ -107,6 +109,11 @@ export default function App() {
   const translationStage = translationMachine.state.stage;
   const [glossary, setGlossary] = useState<string>('');
   const [currentChunk, setCurrentChunk] = useState(0);
+  const [completedCostChunks, setCompletedCostChunks] = useState(0);
+  const [completedExtractionChunks, setCompletedExtractionChunks] = useState(0);
+  const [costSamples, setCostSamples] = useState<CostSample[]>([]);
+  const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [inFlightStartUsd, setInFlightStartUsd] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [translatedText, setTranslatedText] = useState('');
@@ -123,7 +130,7 @@ export default function App() {
   const [autoDownload, setAutoDownload] = useState<'none' | 'epub' | 'pdf' | 'md'>('md');
   const [pendingDownload, setPendingDownload] = useState<'epub' | 'pdf' | 'md' | null>(null);
   const [isIframe, setIsIframe] = useState(false);
-  
+
   // New features state
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -131,7 +138,7 @@ export default function App() {
   const [coverImage, setCoverImage] = useState<string | null>(null);
   const [authorName, setAuthorName] = useState('');
   const [currentFileId, setCurrentFileId] = useState<string | null>(null);
-  
+
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyStorageWarningShownRef = useRef(false);
 
@@ -150,6 +157,9 @@ export default function App() {
   };
 
   const handleLoadHistory = (record: HistoryRecord) => {
+    tokenAbortControllerRef.current?.abort();
+    tokenWorkerTaskRef.current = null;
+    setIsCalculating(false);
     setCurrentFileId(record.id);
     setCustomTitle(record.title);
     setAuthorName(record.author || '');
@@ -159,6 +169,11 @@ export default function App() {
     setSplitTranslation(record.splitTranslation !== false);
     setTranslatedText(record.translatedText);
     setCurrentChunk(record.currentChunk);
+    setCompletedCostChunks(record.extractionComplete === false ? 0 : record.currentChunk);
+    setCompletedExtractionChunks(0);
+    setCostSamples(normalizeCostSamples(record.costSamples));
+    setAnalysisComplete(record.currentChunk > 0);
+    setInFlightStartUsd(null);
     setTotalChunks(record.totalChunks);
     const restoredModel = MODELS.some(model => model.id === record.model)
       ? record.model
@@ -178,13 +193,13 @@ export default function App() {
       ?? (restoredDocumentType === 'auto' ? null : restoredDocumentType),
     );
     setChapterProofreading(record.chapterProofreading !== false);
-    
+
     setFile(null);
     setBase64Data(null);
-    setTokenCount(estimateTextTokens(record.extractedText));
-    
+    setTokenCount(record.extractionComplete === false ? null : estimateTextTokens(record.extractedText));
+
     setShowHistory(false);
-    
+
     if (record.extractionComplete === false) {
       showToast('這份紀錄的 PDF 擷取尚未完成，請重新上傳原始 PDF；部分文字仍可下載。', 'error');
     } else if (!record.usageSnapshot) {
@@ -210,6 +225,10 @@ export default function App() {
       setExtractedText('');
       setTranslatedText('');
       setCurrentChunk(0);
+      setCompletedCostChunks(0);
+      setCostSamples([]);
+      setAnalysisComplete(false);
+      setTokenCount(null);
       setTotalChunks(0);
       setCustomTitle('');
       setNovelContinuity(EMPTY_NOVEL_CONTINUITY);
@@ -273,6 +292,7 @@ export default function App() {
     outputTokens: actualOutputTokens,
     reasoningTokens: actualReasoningTokens,
     actualCost,
+    costBreakdown,
     resetUsage,
     restoreUsage,
     recordUsage,
@@ -319,7 +339,7 @@ export default function App() {
     } catch (err) {
       reportError('pdf_worker_initialization_failed');
     }
-    
+
     return () => {
       translationAbortControllerRef.current?.abort();
       tokenAbortControllerRef.current?.abort();
@@ -338,7 +358,7 @@ export default function App() {
 
   useEffect(() => {
     if (base64Data && file) {
-      void calculateTokens(base64Data, selectedModel, file);
+      void calculateTokens(file);
     }
     return () => {
       tokenAbortControllerRef.current?.abort();
@@ -348,14 +368,14 @@ export default function App() {
         tokenWorkerTaskRef.current = null;
       }
     };
-  }, [selectedModel, base64Data, file]);
+  }, [base64Data, file]);
 
   const handleFileUpload = (selectedFile: File) => {
     if (isTranslating) {
       translationCancelledRef.current = true;
       translationAbortControllerRef.current?.abort();
     }
-    
+
     let isPdf = false;
     let isMd = false;
     try {
@@ -376,12 +396,17 @@ export default function App() {
       pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: extractionWorkerTaskRef.current } });
       extractionWorkerTaskRef.current = null;
     }
-    
+
     setError(null);
     setFile(selectedFile);
     setTranslatedText('');
     setExtractedText('');
     setTokenCount(null);
+    setCompletedCostChunks(0);
+    setCostSamples([]);
+    setCompletedExtractionChunks(0);
+    setAnalysisComplete(false);
+    setInFlightStartUsd(null);
     setCurrentFileId(null);
     setCoverImage(null);
     setAuthorName('');
@@ -395,12 +420,12 @@ export default function App() {
     setResolvedDocumentType(null);
     setCustomTitle('');
     resetUsage();
-    
+
     const reader = new FileReader();
     reader.onload = async (event) => {
       const base64 = (event.target?.result as string).split(',')[1];
       setBase64Data(base64);
-      
+
       if (isMd) {
         setTotalPages(0);
         const text = await selectedFile.text();
@@ -413,131 +438,32 @@ export default function App() {
     reader.readAsDataURL(selectedFile);
   };
 
-  const calculateTokens = async (base64: string, modelId: string, currentFile?: File) => {
+  const calculateTokens = async (sourceFile: File) => {
     const requestId = crypto.randomUUID();
     tokenAbortControllerRef.current?.abort();
-    const tokenController = new AbortController();
-    tokenAbortControllerRef.current = tokenController;
-    if (tokenWorkerTaskRef.current) {
-      pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: tokenWorkerTaskRef.current } });
-    }
+    const controller = new AbortController();
+    tokenAbortControllerRef.current = controller;
     tokenWorkerTaskRef.current = requestId;
     setIsCalculating(true);
-    setError(null);
-    const isCurrentRequest = () => tokenWorkerTaskRef.current === requestId;
+    const isCurrent = () => tokenWorkerTaskRef.current === requestId && !controller.signal.aborted;
     try {
-      const selectedModelData = getModelConfig(modelId);
-      const fileToUse = currentFile || file;
-      if (!fileToUse) throw new Error("File not found");
-      const isMd = fileToUse.name.toLowerCase().endsWith('.md');
-
-      const estimateLocally = async () => {
-        const estimatedTokens = isMd
-          ? Math.ceil((await fileToUse.text()).length * 0.5)
-          : Math.ceil(fileToUse.size / 4);
-        if (isCurrentRequest()) setTokenCount(estimatedTokens);
-      };
-
-      if (selectedModelData.provider === 'openai') {
-        await estimateLocally();
-        return;
-      }
-
-      const apiKey = manualApiKey;
-      if (!apiKey || !isManualKeyActive) {
-        await estimateLocally();
-        return;
-      }
-      const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey });
-
-      let totalTokens = 0;
-
-      if (isMd) {
-        const text = await fileToUse.text();
-        const response = await ai.models.countTokens({
-          model: modelId,
-          config: { abortSignal: tokenController.signal },
-          contents: {
-            parts: [
-              { text: text },
-              { text: 'Translate this document into Traditional Chinese.' }
-            ]
-          }
-        });
-        totalTokens = response.totalTokens ?? 0;
-        if (isCurrentRequest()) setTokenCount(Math.round(totalTokens));
-      } else {
-        const arrayBuffer = await fileToUse.arrayBuffer();
-        
-        if (!pdfWorkerRef.current) {
-          throw new Error("PDF Worker not initialized");
-        }
-
-        return new Promise<void>((resolve, reject) => {
-          const handleMessage = async (e: MessageEvent) => {
-            const { type, payload } = e.data;
-            if (payload?.requestId !== requestId) return;
-            
-            if (type === 'TOTAL_PAGES') {
-              if (isCurrentRequest()) setTotalPages(payload.pageCount);
-            } else if (type === 'TOKEN_CHUNK') {
-              try {
-                const response = await ai.models.countTokens({
-                  model: modelId,
-                  config: { abortSignal: tokenController.signal },
-                  contents: {
-                    parts: [
-                      { inlineData: { data: payload.base64, mimeType: 'application/pdf' } },
-                      { text: 'Translate this document into Traditional Chinese.' }
-                    ]
-                  }
-                });
-                totalTokens += response.totalTokens ?? 0;
-                pdfWorkerRef.current?.postMessage({
-                  type: 'TOKEN_CHUNK_ACK',
-                  payload: { requestId, index: payload.index },
-                });
-                if (payload.isLast) {
-                  if (isCurrentRequest()) setTokenCount(Math.round(totalTokens));
-                  pdfWorkerRef.current?.removeEventListener('message', handleMessage);
-                  resolve();
-                }
-              } catch (err) {
-                pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId } });
-                pdfWorkerRef.current?.removeEventListener('message', handleMessage);
-                reject(err);
-              }
-            } else if (type === 'ERROR') {
-              pdfWorkerRef.current?.removeEventListener('message', handleMessage);
-              reject(new Error(payload.message));
-            } else if (type === 'TASK_CANCELLED') {
-              pdfWorkerRef.current?.removeEventListener('message', handleMessage);
-              resolve();
-            }
-          };
-
-          pdfWorkerRef.current?.addEventListener('message', handleMessage);
-          pdfWorkerRef.current?.postMessage({
-            type: 'CALCULATE_TOKENS', 
-            payload: { requestId, fileBuffer: arrayBuffer }
-          }, [arrayBuffer]);
-        });
-      }
-    } catch (err: any) {
-      if (isCurrentRequest() && !isAbortError(err)) {
-        reportError('token_calculation_failed');
-        setError(`計算 Token 失敗 (Failed to calculate tokens): ${err.message}`);
+      const estimate = sourceFile.name.toLowerCase().endsWith('.md')
+        ? estimateTextTokens(await sourceFile.text())
+        : await estimatePdfSourceTokens(sourceFile, total => {
+          if (isCurrent()) setTotalPages(total);
+        }, controller.signal);
+      if (isCurrent()) setTokenCount(estimate);
+    } catch (err) {
+      if (isCurrent() && !isAbortError(err)) {
+        reportWarning('source_token_estimate_unavailable');
         setTokenCount(null);
       }
     } finally {
-      if (isCurrentRequest()) {
+      if (tokenWorkerTaskRef.current === requestId) {
         tokenWorkerTaskRef.current = null;
         setIsCalculating(false);
       }
-      if (tokenAbortControllerRef.current === tokenController) {
-        tokenAbortControllerRef.current = null;
-      }
+      if (tokenAbortControllerRef.current === controller) tokenAbortControllerRef.current = null;
     }
   };
 
@@ -556,12 +482,17 @@ export default function App() {
       startsNewDocumentRun = true;
     }
 
-    const documentTokens = tokenCount ?? estimateTextTokens(extractedText);
-    const remainingRatio = totalChunks > 0 ? Math.max(0, totalChunks - startingChunk) / totalChunks : 1;
-    const projectedRemaining = estimatePipelineCost(activeModel, Math.round(documentTokens * remainingRatio)).totalUsd;
-    const cumulativeProjectedCost = (startsNewDocumentRun ? 0 : actualCost.totalUsd) + projectedRemaining;
-    if (translationBudgetUsd > 0 && cumulativeProjectedCost > translationBudgetUsd) {
-      setError(`預估完成剩餘內容後，整份文件成本約 $${cumulativeProjectedCost.toFixed(2)} USD，已超過目前 $${translationBudgetUsd.toFixed(2)} USD 上限。請調高文件上限或改用較省成本的模型。`);
+    const preflight = forecastDocumentCost({
+      ...forecastOptions,
+      spentUsd: startsNewDocumentRun ? 0 : actualCost.totalUsd,
+      remainingTokens: startingChunk === 0 ? tokenCount : forecastOptions.remainingTokens,
+      remainingChunks: startingChunk === 0 ? sourceChunkTokens.length || estimatedSourceChunks : forecastOptions.remainingChunks,
+      analysisComplete: startingChunk > 0 && analysisComplete,
+      samples: startsNewDocumentRun ? [] : costSamples,
+      inFlightUsd: 0,
+    });
+    if (preflight.known && translationBudgetUsd > 0 && preflight.totalUsd > translationBudgetUsd) {
+      setError(`預估完成後整份文件約 $${preflight.totalUsd.toFixed(2)} USD（規劃範圍 $${preflight.lowUsd.toFixed(2)}–$${preflight.highUsd.toFixed(2)}），超過目前 $${translationBudgetUsd.toFixed(2)} USD 上限。請調高文件上限或選擇較省成本的模型；估算不代表帳單保證。`);
       return;
     }
 
@@ -573,8 +504,14 @@ export default function App() {
       setShowKeyModal(true);
       return;
     }
-    
-    if (startsNewDocumentRun) resetUsage();
+
+    if (startsNewDocumentRun) {
+      resetUsage();
+      setCostSamples([]);
+    }
+    setCompletedCostChunks(startingChunk);
+    setCompletedExtractionChunks(0);
+    if (startingChunk === 0) setAnalysisComplete(false);
     translationAbortControllerRef.current?.abort();
     const translationController = new AbortController();
     translationAbortControllerRef.current = translationController;
@@ -596,6 +533,7 @@ export default function App() {
     setStartTime(currentStartTime);
     setEstimatedRemainingTime(null);
     const fileId = currentFileId || crypto.randomUUID();
+    let latestCostSamples = startsNewDocumentRun ? [] : normalizeCostSamples(costSamples);
     let latestExtractedText = extractedText;
     let latestTranslatedText = startingChunk > 0 ? translatedText : '';
     let latestExtractionComplete = extractionComplete;
@@ -619,7 +557,7 @@ export default function App() {
     try {
       throwIfAborted(translationController.signal);
       setCurrentFileId(fileId);
-      
+
       const saveCurrentState = async (
         status: 'translating' | 'completed' | 'error',
         current: number,
@@ -655,6 +593,7 @@ export default function App() {
           chapterProofreading,
           novelContinuity: latestNovelContinuity,
           usageSnapshot: getUsageSnapshot(),
+          costSamples: latestCostSamples,
           budgetUsd: translationBudgetUsd,
         };
         try {
@@ -673,19 +612,19 @@ export default function App() {
 
       let fullMarkdown = '';
       const isMd = file?.name?.toLowerCase().endsWith('.md');
-      
+
       if (isMd || (extractedText && extractionComplete)) {
         fullMarkdown = extractedText;
       } else if (currentChunk === 0 && file) {
         const arrayBuffer = await file.arrayBuffer();
-        
+
         if (!pdfWorkerRef.current) {
           throw new Error("PDF Worker not initialized");
         }
 
         // --- STAGE 1: EXTRACTION (Worker-assisted) ---
         setStatusMessage('正在從 PDF 提取文字...');
-        
+
         const results: string[] = [];
         let completedExtractions = 0;
         let totalExtractionChunks = 0;
@@ -703,7 +642,7 @@ export default function App() {
           const handleMessage = async (e: MessageEvent) => {
             const { type, payload } = e.data;
             if (payload?.requestId !== extractionRequestId) return;
-            
+
             if (type === 'TOTAL_CHUNKS') {
               totalExtractionChunks = payload.totalChunks;
               setTotalChunks(payload.totalChunks);
@@ -716,7 +655,7 @@ export default function App() {
                 if (translationCancelledRef.current) throw new Error('PDF 處理已取消');
                 const rawTextLength = rawText.replace(/\s+/g, '').length;
                 const hasRawText = rawTextLength > 10;
-                
+
                 let success = false;
                 let retries = 0;
                 const MAX_RETRIES = translationRetryLimit;
@@ -736,11 +675,11 @@ export default function App() {
                       maxOutputTokens: 8_192,
                     });
                     if (translationCancelledRef.current) throw new Error('PDF 處理已取消');
-                    
+
                     if (response.usageMetadata) {
-                      recordUsage(response.usageMetadata, selectedModel, translationBudgetUsd);
+                      recordUsage(response.usageMetadata, selectedModel, translationBudgetUsd, 'extraction');
                     }
-                    
+
                     results[index] = response.text || '';
                     success = true;
                   } catch (err) {
@@ -755,6 +694,7 @@ export default function App() {
                 }
 
                 completedExtractions++;
+                setCompletedExtractionChunks(completedExtractions);
                 setCurrentChunk(completedExtractions);
                 setStatusMessage(`正在提取文字 (已完成 ${completedExtractions}/${totalExtractionChunks} 部分)...`);
                 latestTotalChunks = totalExtractionChunks;
@@ -789,7 +729,7 @@ export default function App() {
 
           pdfWorkerRef.current?.addEventListener('message', handleMessage);
           pdfWorkerRef.current?.postMessage({
-            type: 'GET_EXTRACTION_CHUNKS', 
+            type: 'GET_EXTRACTION_CHUNKS',
             payload: { requestId: extractionRequestId, fileBuffer: arrayBuffer }
           }, [arrayBuffer]);
           });
@@ -805,6 +745,11 @@ export default function App() {
       }
       latestExtractionComplete = true;
       setExtractionComplete(true);
+      // Replace upload estimates with the actual translation source, not PDF bytes/modalities.
+      tokenAbortControllerRef.current?.abort();
+      tokenWorkerTaskRef.current = null;
+      setIsCalculating(false);
+      setTokenCount(estimateTextTokens(fullMarkdown));
 
       // --- STAGE 1.5: GLOSSARY GENERATION & STYLE ANALYSIS ---
       let glossaryText = glossary;
@@ -812,12 +757,12 @@ export default function App() {
       let detectedCharacters = characterMap;
       let globalSummary = '';
       let detectedDocumentType: DetectedDocumentType = latestEffectiveDocumentType ?? 'general';
-      
+
       const needsDocumentAnalysis = startingChunk === 0 || (documentType === 'auto' && !latestEffectiveDocumentType);
       if (needsDocumentAnalysis) {
         translationMachine.transition('analyzing');
         setStatusMessage('正在提取專業術語、角色關係與分析文本風格...');
-        
+
         try {
           const analysisResponse = await generateContentWrapper({
             model: selectedModel,
@@ -827,7 +772,7 @@ export default function App() {
             jsonSchema: DOCUMENT_ANALYSIS_SCHEMA,
           });
           if (analysisResponse.usageMetadata) {
-            recordUsage(analysisResponse.usageMetadata, selectedModel, translationBudgetUsd);
+            recordUsage(analysisResponse.usageMetadata, selectedModel, translationBudgetUsd, 'analysis');
           }
 
           const analysis = parseDocumentAnalysis(analysisResponse.text || '');
@@ -836,7 +781,7 @@ export default function App() {
           detectedStyle = analysis.styleGuide;
           globalSummary = analysis.globalSummary;
           detectedDocumentType = analysis.documentType;
-          
+
           setTranslationStyle(detectedStyle);
           setGlossary(glossaryText);
           setCharacterMap(detectedCharacters);
@@ -853,7 +798,9 @@ export default function App() {
           setCharacterMap('無');
         }
       }
-      
+
+      setAnalysisComplete(true);
+
       // --- STAGE 2: TRANSLATION ---
       translationMachine.transition('translating');
       setStatusMessage('正在準備翻譯...');
@@ -866,10 +813,10 @@ export default function App() {
       }
       latestTotalChunks = translationChunksCount;
       setTotalChunks(translationChunksCount);
-      
+
       let fullTranslatedText = latestTranslatedText;
       let previousTranslatedText = latestTranslatedText.slice(-1000);
-      
+
       // Start from the current chunk if resuming
       const startChunk = startingChunk;
       let previousSourceText = startChunk > 0 ? textChunks[startChunk - 1].slice(-1000) : '';
@@ -904,6 +851,9 @@ export default function App() {
           summary: latestPlotSummary,
           novel: latestNovelContinuity,
         };
+        const chunkStartUsage = getUsageSnapshot();
+        const chunkStartUsd = chunkStartUsage.inputUsd + chunkStartUsage.outputUsd;
+        setInFlightStartUsd(chunkStartUsd);
         latestProgress = beginTranslationChunk(latestProgress, i);
         setCurrentChunk(i + 1);
         setStatusMessage(`正在翻譯 (第 ${i + 1}/${translationChunksCount} 部分)...`);
@@ -925,7 +875,7 @@ export default function App() {
           signal: translationController.signal,
           generate: generateContentWrapper,
           generateStream: generateContentStreamWrapper,
-          onUsage: (usage, billedModel) => recordUsage(usage, billedModel, translationBudgetUsd),
+          onUsage: (usage, billedModel, stage) => recordUsage(usage, billedModel, translationBudgetUsd, stage),
           onPreview: (preview) => setTranslatedText(fullTranslatedText + preview),
           onStage: (stage, message) => translationMachine.transition(stage, message),
           onWarning: reportWarning,
@@ -1013,7 +963,7 @@ export default function App() {
               maxOutputTokens: 16_384,
               jsonSchema: CHAPTER_PROOFREADING_SCHEMA,
             });
-            if (reviewResponse.usageMetadata) recordUsage(reviewResponse.usageMetadata, selectedModel, translationBudgetUsd);
+            if (reviewResponse.usageMetadata) recordUsage(reviewResponse.usageMetadata, selectedModel, translationBudgetUsd, 'chapter_review');
             const review = parseChapterProofreadingResult(reviewResponse.text || '{}');
             const restored = restoreProtectedContent(review.correctedChapter, protectedChapter.entries);
             const reviewQuality = assessTranslationQuality(sourceChapter, restored.text, { documentType: effectiveDocumentType });
@@ -1058,11 +1008,20 @@ export default function App() {
 
         latestTranslatedText = fullTranslatedText;
         latestProgress = commitTranslationChunk(latestProgress, i);
+        const chunkEndUsage = getUsageSnapshot();
+        const chunkUsd = Math.max(0, chunkEndUsage.inputUsd + chunkEndUsage.outputUsd - chunkStartUsd);
+        if (chunkUsd > 0) latestCostSamples = normalizeCostSamples([...latestCostSamples, {
+          profile: costProfile(selectedModel, effectiveDocumentType, chapterProofreading, translationRetryLimit, customInstructions),
+          sourceTokens: estimateTextTokens(textChunks[i]), costUsd: chunkUsd,
+        }]);
+        setCostSamples(latestCostSamples);
+        setCompletedCostChunks(i + 1);
+        setInFlightStartUsd(null);
         chunkMemoryCheckpoint = null;
         setTranslatedText(fullTranslatedText);
         previousTranslatedText = currentChunkTranslated.slice(-1000); // Keep last 1000 chars for context
         previousSourceText = textChunks[i].slice(-1000);
-        
+
         // Save progress to IndexedDB
         if (shouldCheckpointTranslationProgress(i + 1, translationChunksCount)) {
           await saveCurrentState(
@@ -1078,7 +1037,7 @@ export default function App() {
             i === 0,
           );
         }
-        
+
         // Estimation update
         const now = Date.now();
         const elapsed = now - currentStartTime;
@@ -1086,13 +1045,13 @@ export default function App() {
         const avg = elapsed / completed;
         const remaining = translationChunksCount - completed;
         setEstimatedRemainingTime(Math.round((avg * remaining) / 1000));
-        
+
         if (i < translationChunksCount - 1) {
           // Reduced delay for better efficiency
           await abortableDelay(500, translationController.signal);
         }
       }
-      
+
       translationMachine.transition('saving', '正在儲存完成的翻譯...');
       await saveCurrentState(
         'completed',
@@ -1105,12 +1064,12 @@ export default function App() {
         dynamicCharacterMap,
         latestPlotSummary,
       );
-      
+
       if (fullTranslatedText && autoDownload !== 'none') {
         setPendingDownload(autoDownload);
       }
       translationMachine.transition('completed', '');
-      
+
     } catch (err: any) {
       if (chunkMemoryCheckpoint) {
         latestGlossary = chunkMemoryCheckpoint.glossary;
@@ -1139,7 +1098,11 @@ export default function App() {
       }
       const resumableProgress = pauseTranslationProgress(latestProgress);
       setCurrentChunk(resumableProgress.completedChunks);
+      setCompletedCostChunks(resumableProgress.completedChunks);
+      // An unfinished first chunk will cause document analysis to run again on resume.
+      if (resumableProgress.completedChunks === 0) setAnalysisComplete(false);
       if (!latestExtractionComplete) {
+        setCompletedExtractionChunks(0);
         setError('PDF 擷取尚未完成，已保留部分文字與已發生費用。可在本頁重試；重新載入紀錄後需重新上傳原始 PDF。');
       }
       if (fileId) {
@@ -1166,6 +1129,7 @@ export default function App() {
           chapterProofreading,
           novelContinuity: latestNovelContinuity,
           usageSnapshot: getUsageSnapshot(),
+          costSamples: latestCostSamples,
           budgetUsd: translationBudgetUsd,
         };
         try {
@@ -1176,6 +1140,7 @@ export default function App() {
         }
       }
     } finally {
+      setInFlightStartUsd(null);
       if (translationAbortControllerRef.current === translationController) {
         translationAbortControllerRef.current = null;
       }
@@ -1216,11 +1181,11 @@ export default function App() {
       showToast("在內嵌模式下可能無法下載檔案，請在新分頁開啟以獲得完整功能。", 'error');
       return;
     }
-    
+
     setIsExtracting(true);
     setStatusMessage('正在從 PDF 提取文字...');
     setError(null);
-    
+
     try {
       let fullText = '';
       const isMd = file.name.toLowerCase().endsWith('.md');
@@ -1234,11 +1199,11 @@ export default function App() {
           setExtractedText(text);
         });
       }
-      
+
       setStatusMessage('正在產生 EPUB...');
       const baseName = customTitle.trim() || file?.name.replace(/\.(pdf|md)$/i, '') || 'document';
       const titleToUse = baseName;
-      
+
       const blob = await requestEpub({
         title: titleToUse,
         markdown: fullText,
@@ -1246,10 +1211,10 @@ export default function App() {
         cover: coverImage || undefined,
       });
       downloadBlob(blob, `${titleToUse}.epub`);
-      
+
       showToast('EPUB 轉換並下載成功！', 'success');
       setExtractedText(fullText);
-      
+
     } catch (err: any) {
       reportError('pdf_to_epub_failed');
       setError(`轉換失敗: ${err.message}`);
@@ -1261,17 +1226,39 @@ export default function App() {
   };
 
   const selectedModelData = getModelConfig(selectedModel);
-  
-  // The pipeline reads source text multiple times for analysis, translation,
-  // proofreading and glossary updates. Keep document tokens separate from the
-  // estimated billable pipeline tokens so the UI does not mislabel a multiplier
-  // as the source document size.
-  const estimatedCost = estimatePipelineCost(selectedModelData, tokenCount ?? 0);
-  const remainingEstimateRatio = totalChunks > 0 ? Math.max(0, totalChunks - currentChunk) / totalChunks : 1;
-  const remainingEstimatedCost = estimatePipelineCost(
-    selectedModelData,
-    Math.round((tokenCount ?? 0) * remainingEstimateRatio),
-  );
+
+  // Cache book segmentation; streaming preview updates must not rescan the entire book.
+  const sourceChunkTokens = useMemo(() => extractionComplete && extractedText
+    ? (splitTranslation ? splitMarkdownIntoTokenChunks(extractedText, 1800) : [extractedText]).map(estimateTextTokens)
+    : [], [extractionComplete, extractedText, splitTranslation]);
+  const estimatedSourceChunks = tokenCount ? (splitTranslation ? Math.ceil(tokenCount / 1800) : 1) : 0;
+  const remainingSourceTokens = sourceChunkTokens.length
+    ? sourceChunkTokens.slice(completedCostChunks).reduce((sum, tokens) => sum + tokens, 0) : tokenCount;
+  const memoryTokens = useMemo(() => estimateTextTokens([
+    translationStyle, glossary, characterMap, plotSummary, customInstructions,
+    formatNovelContinuity(novelContinuity),
+  ].filter(Boolean).join('\n')), [translationStyle, glossary, characterMap, plotSummary, customInstructions, novelContinuity]);
+  const forecastDocumentType = resolveDocumentType(documentType, resolvedDocumentType ?? 'general');
+  const analysisSourceTokens = useMemo(() => extractionComplete && extractedText
+    ? estimateTextTokens(sampleDocumentForAnalysis(extractedText)) : undefined, [extractionComplete, extractedText]);
+  const promptOverheads = useMemo(() => estimatePromptOverheads({
+    style: translationStyle || '一般/通用', glossary: glossary || '無', characterMap: characterMap || '無',
+    plotSummary: [plotSummary, formatNovelContinuity(novelContinuity)].filter(Boolean).join('\n'),
+    customInstructions, documentType: forecastDocumentType,
+  }), [translationStyle, glossary, characterMap, plotSummary, novelContinuity, customInstructions, forecastDocumentType]);
+  const forecastOptions = {
+    model: selectedModel, documentTokens: tokenCount, remainingTokens: remainingSourceTokens,
+    remainingChunks: sourceChunkTokens.length ? Math.max(0, sourceChunkTokens.length - completedCostChunks) : estimatedSourceChunks,
+    extractionComplete, analysisComplete, chapterReview: chapterProofreading,
+    documentType: forecastDocumentType, promptOverheads, analysisSourceTokens,
+    extractionChunks: totalPages > 0 ? Math.ceil(totalPages / 5) : undefined,
+    remainingExtractionRatio: totalPages > 0 ? 1 - completedExtractionChunks / Math.ceil(totalPages / 5) : 1,
+    currentChunkTokens: sourceChunkTokens[completedCostChunks],
+    retryLimit: translationRetryLimit, memoryTokens, customInstructions,
+    spentUsd: actualCost.totalUsd, samples: costSamples,
+    inFlightUsd: inFlightStartUsd === null ? 0 : Math.max(0, actualCost.totalUsd - inFlightStartUsd),
+  };
+  const costForecast = forecastDocumentCost(forecastOptions);
   const actualUsage = {
     inputTokens: actualInputTokens,
     cachedInputTokens: actualCachedInputTokens,
@@ -1302,14 +1289,14 @@ export default function App() {
           </div>
         </div>
         <div className="mode-switch inline-flex gap-1 mb-8 p-1 rounded-xl print:hidden">
-          <button 
+          <button
             onClick={() => setActiveTab('translate')}
             data-testid="tab-translate"
             className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'translate' ? 'is-active text-blue-400' : 'text-slate-400 hover:text-slate-300'}`}
           >
             PDF 翻譯
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('converter')}
             data-testid="tab-converter"
             className={`px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'converter' ? 'is-active text-blue-400' : 'text-slate-400 hover:text-slate-300'}`}
@@ -1319,9 +1306,9 @@ export default function App() {
         </div>
 
         <div className="workspace-grid grid grid-cols-1 lg:grid-cols-12 gap-6 print:block print:gap-0">
-          
+
           <div className="control-rail lg:col-span-5 xl:col-span-4 space-y-5 print:hidden">
-            
+
             {activeTab === 'translate' && (
               <ModelSelectionPanel
                 selectedModel={selectedModel}
@@ -1330,7 +1317,7 @@ export default function App() {
                 budgetUsd={translationBudgetUsd}
                 spentUsd={actualCost.totalUsd}
                 retryLimit={translationRetryLimit}
-                estimatedUsd={remainingEstimatedCost.totalUsd}
+                estimatedUsd={costForecast.remainingUsd}
                 onModelChange={setSelectedModel}
                 onBudgetChange={setTranslationBudgetUsd}
                 onRetryLimitChange={setTranslationRetryLimit}
@@ -1347,7 +1334,7 @@ export default function App() {
                   <p className="text-xs text-slate-500 mt-0.5">支援 PDF 與 Markdown</p>
                 </div>
               </div>
-              
+
               <DocumentUploadDropzone file={file} totalPages={totalPages} onFile={handleFileUpload} />
 
               {activeTab === 'translate' && (
@@ -1375,7 +1362,7 @@ export default function App() {
 
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-slate-400 font-medium">翻譯完成後自動下載：</span>
-                    <select 
+                    <select
                       value={autoDownload}
                       onChange={(e) => setAutoDownload(e.target.value as any)}
                       className="bg-slate-950 border border-slate-700 text-slate-300 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none"
@@ -1458,8 +1445,8 @@ export default function App() {
                 <TranslationCostSummary
                   isCalculating={isCalculating}
                   documentTokens={tokenCount}
-                  estimatedUsage={estimatedCost}
-                  estimatedCost={estimatedCost}
+                  forecast={costForecast}
+                  costBreakdown={costBreakdown}
                   actualUsage={actualUsage}
                   actualCost={actualCost}
                 />
@@ -1475,8 +1462,8 @@ export default function App() {
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-400 mb-1">自訂書名 (選填)</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       value={customTitle}
                       onChange={(e) => setCustomTitle(e.target.value)}
                       placeholder={file ? file.name.replace('.pdf', '') : '未命名文件'}
@@ -1503,7 +1490,7 @@ export default function App() {
                   />
                   <div>
                     <label className="block text-sm font-medium text-slate-400 mb-1">自訂翻譯指示 (選填)</label>
-                    <textarea 
+                    <textarea
                       value={customInstructions}
                       onChange={(e) => setCustomInstructions(e.target.value)}
                       placeholder="例如：請將主角的名字翻譯為「約翰」，並保持幽默的語氣..."

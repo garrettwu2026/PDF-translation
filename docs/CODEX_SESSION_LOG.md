@@ -287,3 +287,13 @@ Continuation after interruption:
 - Mark partial PDF extraction explicitly and require the original file to retry; do not silently drop a failed final OCR chunk.
 - Preserve split mode, reject mismatched resume boundaries, normalize legacy memory, and warn when old records lack cost data.
 - Scale output ceilings with source size and reject oversized unsplit chunks before paid requests. Novel memory remains a model-assisted consistency aid, not a proof of factual or chronological correctness.
+
+### 2026-09-03 — 修正長文件預估與實際費用落差
+
+使用者要求依先前診斷建議實作修正。
+
+- 以實際擷取文字更新原文 token 估算；未知掃描 PDF 不顯示誤導性的零成本。
+- 依各翻譯階段、實際 reviewer 模型、提示詞與文件記憶估算成本。
+- 使用成功提交段落的成本動態校正剩餘預估，避免提前扣掉進行中段落或重算既有費用。
+- 顯示已花費／剩餘預估／預計完成總額及階段明細，保留既有品質與費用上限機制。
+- 同步維護跨電腦紀錄；不保存測試以外的上傳內容、不使用付費翻譯 API 驗證。

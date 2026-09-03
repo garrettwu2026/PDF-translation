@@ -156,3 +156,12 @@ The 2026-08-31 redesign, refined on 2026-09-01, changes the previous dark, infor
 - stacked responsive layout on smaller screens
 
 The functional workflow remains unchanged.
+
+## 2026-09-03 成本估算架構更新
+
+- 全流程固定倍率已移除。請使用 `src/lib/cost-forecast.ts` 與 `cost-prompts.ts`，不要再以 PDF 檔案 bytes 推算翻譯原文 tokens。
+- 費用 UI 區分累積已花費、剩餘預估及預計完成總額，提供階段／模型明細與非保證的規劃範圍。
+- PDF 原生文字估算不呼叫模型；稀疏／掃描頁標示未知。完成擷取後按實際 Markdown 重算來源、分段與分析取樣。
+- `completedCostChunks` 只在整段提交後增加；進行中段落的已計費抵扣不得消耗其他段落預算。
+- 歷史可選欄位 `costSamples` 保存最多 12 個合格樣本；`usageSnapshot.breakdown` 保存階段／模型成本。舊紀錄金額保持原值並列為未分類。
+- 估算假設、校正權重及限制詳見 `docs/COST_ESTIMATION.md`。未更改模型定價、品質檢查或推理設定。

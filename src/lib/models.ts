@@ -46,8 +46,6 @@ export const MODELS: readonly ModelConfig[] = [
 
 export const DEFAULT_MODEL_ID = 'gemini-3.7-flash';
 export const USD_TO_TWD = 32.5;
-export const PIPELINE_INPUT_MULTIPLIER = 4;
-export const PIPELINE_OUTPUT_MULTIPLIER = 2.5;
 
 export const getModelConfig = (modelId: string) =>
   MODELS.find((model) => model.id === modelId) ?? MODELS[0];
@@ -92,12 +90,6 @@ export const calculateTokenCost = (
     totalUsd,
     totalTwd: totalUsd * USD_TO_TWD,
   };
-};
-
-export const estimatePipelineCost = (model: ModelConfig, documentTokens: number) => {
-  const inputTokens = Math.round(Math.max(0, documentTokens) * PIPELINE_INPUT_MULTIPLIER);
-  const outputTokens = Math.round(Math.max(0, documentTokens) * PIPELINE_OUTPUT_MULTIPLIER);
-  return { inputTokens, outputTokens, ...calculateTokenCost(model, { inputTokens, outputTokens }) };
 };
 
 const addUtcDays = (isoDate: string, days: number) => {
