@@ -27,6 +27,7 @@ export function HistoryModal({ records, currentFileId, onClose, onLoad, onReques
                 <div className="flex items-start justify-between gap-4">
                   <button onClick={() => onLoad(record)} className="flex-1 min-w-0 text-left rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" aria-label={`載入 ${record.title}`}>
                     <h3 className="font-medium text-slate-200 truncate mb-1">{record.title}</h3>
+                    {!!record.pendingRequests && <p className="text-xs text-amber-600 mb-2">有 {record.pendingRequests} 筆請求用量待確認；費用僅包含已知用量。</p>}
                     <div className="flex items-center gap-3 text-xs text-slate-400">
                       <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" />{new Date(record.timestamp).toLocaleString()}</span>
                       <span className="flex items-center gap-1">
@@ -42,7 +43,7 @@ export function HistoryModal({ records, currentFileId, onClose, onLoad, onReques
           )}
         </div>
         <div className="border-t border-slate-800 px-6 py-3 text-xs text-slate-500">
-          已保存 {records.length}/{HISTORY_MAX_RECORDS} 筆；超過數量或容量上限時會自動移除最舊紀錄。
+          已保存 {records.length}/{HISTORY_MAX_RECORDS} 筆；超限時清理舊紀錄及中間結果，未完成翻譯暫不自動移除。
         </div>
     </AccessibleDialog>
   );

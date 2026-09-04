@@ -59,6 +59,8 @@ export const useTranslationUsage = () => {
     meterRef.current.assertCanReserve(getModelConfig(modelId), estimate, limitUsd), []);
 
   const getUsageSnapshot = useCallback(() => meterRef.current.snapshot(), []);
+  const enforceBudget = useCallback((modelId: string, limitUsd: number) =>
+    meterRef.current.enforce(getModelConfig(modelId), limitUsd), []);
 
   return {
     ...usageTotals,
@@ -69,5 +71,6 @@ export const useTranslationUsage = () => {
     recordUsage,
     assertCanReserve,
     getUsageSnapshot,
+    enforceBudget,
   };
 };

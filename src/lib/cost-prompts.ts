@@ -19,7 +19,7 @@ export function estimatePromptOverheads(context: {
   const count = (prompt: string, schema?: unknown) =>
     estimateTextTokens(prompt + (schema ? JSON.stringify(schema) : ''));
   return {
-    extraction: count(extractionSystemInstruction(true) + buildExtractionPrompt('', true)),
+    extraction: count(extractionSystemInstruction(false) + buildExtractionPrompt('', false)),
     analysis: count(buildDocumentAnalysisPrompt(''), DOCUMENT_ANALYSIS_SCHEMA),
     // Prior source/translation tails are up to 1000 characters each; allow 1250 tokens.
     draft: count(buildTranslationSystemInstruction({ ...context, documentTypeInstruction,

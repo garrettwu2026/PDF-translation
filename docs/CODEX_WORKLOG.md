@@ -194,3 +194,17 @@ All dates use Asia/Taipei unless noted otherwise.
 - 新增九項回歸測試，涵蓋 native／OCR 路由、過期任務、失敗批次、費用上限、取消、Worker 清理、章節保護內容與失敗仍計費。
 - 驗證：使用 bundled Node 執行 npm run check 等效的 TypeScript、全部 120 項測試及正式 Vite build，全部通過。
 - Browser 技能用於本機介面回歸：合成 Markdown 上傳、26-token 估算及模型切換重算、EPUB 作者設定、轉換器預覽、API／歷史視窗開關，無 console error；未讀取金鑰或呼叫付費翻譯 API。未執行整本書的真實模型端到端翻譯。
+
+## 2026-09-04 — 優先可靠性項目 1–5
+
+- 改為逐頁原生文字／OCR 路由：原生文字在本機擷取，僅稀疏頁發送單頁 PDF。固定 OCR PDF metadata 保持重試雜湊穩定；取消亦清理 PDF document。
+- 新增正常 finishReason／非空結果驗證，拒絕截斷及過濾結果；檢查 Worker 頁面順序／完整覆蓋，保留明確空白頁標記處理與完整原文落盤。
+- IndexedDB v2 新增 requests store；以精確請求雜湊保存各階段回應，已完成階段可跨重新整理重用而不再次計費。品質重試隔離不同嘗試；暫時性失敗可重用已成功階段。
+- 每次已知用量立即存檔，完整結果與費用在同一 transaction 保存後才檢查超額；未完成／缺用量請求保留待確認。所有儲存失敗會停止後續付費工作。
+- 每段提交都存檔，額外保存章節累積上下文、自訂指示及前段譯文尾段。重新上傳同一 PDF 可恢復 OCR；設定與來源雜湊防止誤用舊結果。
+- 引入 Web Locks：阻止同網站／同瀏覽器分頁重複翻譯同來源，刪除亦取鎖；不支援原子鎖的瀏覽器停止付費流程。未完成歷史免於自動清理；刪除歷史連帶清理中間結果。
+- 修正原生文字 PDF 的預估擷取成本為零，OCR 改為逐頁規劃。費用預估仍保守計入未提交段落，未逐階段扣除本機快取。
+- OpenAI 官方 API 文件用於核對 finish_reason；實作只沿用既有 API，沒有改模型定價或請求新權限。參考：https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+- 驗證：bundled Node 執行 TypeScript、134 項單元測試、正式 Vite build 全通過；使用獨立測試 Chrome profile 執行 6 項 Playwright E2E 全通過。覆蓋預算停止／重新整理／續傳／匯出、校對途中重新整理、雙分頁互斥與停止釋鎖、混合 PDF 單頁 OCR／截斷重試，以及已付費章節校稿重用。
+- E2E 使用合成 PDF／Markdown、假金鑰與攔截的供應商 HTTP；沒有發出真實付費翻譯。未驗證真實掃描書 OCR 準確率；具文字層但同頁含其他圖片文字的混合頁仍可能需要更細緻的版面分析。
+- 限制：瀏覽器關閉後不會繼續執行；跨裝置不共用鎖；失聯請求可能已被供應商計費，待確認紀錄不是精確帳單或遠端 exactly-once 保證。

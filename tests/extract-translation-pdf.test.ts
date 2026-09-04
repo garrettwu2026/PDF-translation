@@ -22,7 +22,7 @@ function setup(generate: (options: GenerateContentOptions) => Promise<ContentRes
   const job = extractTranslationPdf({
     worker: worker as unknown as ExtractionWorker, fileBuffer: new ArrayBuffer(0), requestId: 'task',
     model: 'gemini-3.7-flash', retryLimit: 1, signal: controller.signal, isCancelled: () => false,
-    generate, onUsage, onTotal: () => {}, onProgress: p => progress.push(p), onWarning: () => {},
+    generate, onUsage, onTotal: () => {}, onProgress: p => { progress.push(p); }, onWarning: () => {},
   });
   return { worker, controller, progress, job };
 }
@@ -32,32 +32,31 @@ test('extraction keeps native/OCR requests, usage, ordered progress and ACKs sco
   let billed = 0;
   const run = setup(async options => {
     calls.push(options);
-    return { text: calls.length === 1 ? 'Native page' : 'Scanned page', usageMetadata: { promptTokenCount: 10 } };
+    return { text: 'Scanned page', finishReason: 'STOP', usageMetadata: { promptTokenCount: 10 } };
   }, () => { billed++; });
   await run.worker.emit('EXTRACTION_CHUNK', { requestId: 'old-task', index: 0, rawText: 'Ignored' });
   assert.equal(calls.length, 0);
   await run.worker.emit('TOTAL_CHUNKS', { totalChunks: 2 });
   await run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: 'Readable native source text', base64: 'unused' });
-  assert.equal(billed, 1);
-  assert.equal(run.progress[0].markdown, 'Native page');
-  assert.equal(calls[0].base64Pdf, undefined);
+  assert.equal(billed, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(run.progress[0].markdown, 'Readable native source text');
+  await run.worker.emit('EXTRACTION_CHUNK', { index: 1, rawText: '', base64: 'synthetic-pdf' });
+  assert.equal(calls[0].base64Pdf, 'synthetic-pdf');
   assert.equal(calls[0].maxOutputTokens, 8192);
   assert.equal(calls[0].signal, run.controller.signal);
-  await run.worker.emit('EXTRACTION_CHUNK', { index: 1, rawText: '', base64: 'synthetic-pdf' });
-  assert.equal(calls[1].base64Pdf, 'synthetic-pdf');
-  assert.equal(await run.job, 'Native page\n\nScanned page');
-  assert.equal(billed, 2);
+  assert.match(await run.job, /Readable native source text[\s\S]*Scanned page/);
+  assert.equal(billed, 1);
   assert.deepEqual(run.worker.messages.filter(m => m.type === 'EXTRACTION_CHUNK_ACK').map(m => m.payload.index), [0, 1]);
   assert.equal(run.worker.listeners.size, 0);
 });
 
 test('extraction rejects a failed final batch and retains only successful progress', async () => {
-  let calls = 0;
-  const run = setup(async () => { if (++calls === 2) throw new Error('synthetic failure'); return { text: 'Completed' }; });
+  const run = setup(async () => { throw new Error('synthetic failure'); });
   const rejected = assert.rejects(run.job, /synthetic failure/);
   await run.worker.emit('TOTAL_CHUNKS', { totalChunks: 2 });
   await run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: 'Readable native source text' });
-  await run.worker.emit('EXTRACTION_CHUNK', { index: 1, rawText: 'Readable native source text' });
+  await run.worker.emit('EXTRACTION_CHUNK', { index: 1, rawText: '', base64: 'scan' });
   await rejected;
   assert.equal(run.progress.length, 1);
   assert.equal(run.worker.listeners.size, 0);
@@ -69,7 +68,7 @@ test('extraction budget stops propagate without acknowledging the uncommitted ba
   const run = setup(async () => ({ text: 'Paid result', usageMetadata: { promptTokenCount: 10 } }), () => { throw error; });
   const rejected = assert.rejects(run.job, actual => actual === error);
   await run.worker.emit('TOTAL_CHUNKS', { totalChunks: 1 });
-  await run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: 'Readable native source text' });
+  await run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: '', base64: 'scan' });
   await rejected;
   assert.equal(run.progress.length, 0);
   assert.equal(run.worker.messages.filter(m => m.type === 'EXTRACTION_CHUNK_ACK').length, 0);
@@ -82,7 +81,7 @@ test('aborting extraction settles promptly and ignores an obsolete provider resp
   const run = setup(() => new Promise(resolve => { finish = resolve; }), () => { billed++; });
   const rejected = assert.rejects(run.job, { name: 'AbortError' });
   await run.worker.emit('TOTAL_CHUNKS', { totalChunks: 1 });
-  const pending = run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: 'Readable native source text' });
+  const pending = run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: '', base64: 'scan' });
   run.controller.abort();
   await rejected;
   finish({ text: 'Late result', usageMetadata: { promptTokenCount: 10 } });
@@ -112,4 +111,35 @@ test('worker startup failure still cleans listeners when cancellation also fails
   });
   await assert.rejects(job, actual => actual === failure);
   assert.equal(worker.listeners.size, 0);
+});
+
+for (const response of [
+  { text: '', finishReason: 'STOP' },
+  { text: 'Cut off', finishReason: 'MAX_TOKENS' },
+  { text: 'Filtered', finishReason: 'content_filter' },
+]) {
+  test('rejects incomplete OCR: ' + response.finishReason + '/' + response.text, async () => {
+    const run = setup(async () => response);
+    const rejected = assert.rejects(run.job, /未完整結束/);
+    await run.worker.emit('TOTAL_CHUNKS', { totalChunks: 1 });
+    await run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: '', base64: 'scan' });
+    await rejected;
+    assert.equal(run.progress.length, 0);
+  });
+}
+
+test('rejects a page gap instead of completing a partial source', async () => {
+  const run = setup(async () => ({ text: 'unused' }));
+  const rejected = assert.rejects(run.job, /覆蓋不完整/);
+  await run.worker.emit('TOTAL_CHUNKS', { totalChunks: 2 });
+  await run.worker.emit('EXTRACTION_CHUNK', { index: 1, rawText: 'Readable native source text' });
+  await rejected;
+});
+
+test('explicitly empty scanned pages keep coverage without translating the sentinel', async () => {
+  const run = setup(async () => ({ text: '<EMPTY_PAGE>', finishReason: 'STOP' }));
+  await run.worker.emit('TOTAL_CHUNKS', { totalChunks: 2 });
+  await run.worker.emit('EXTRACTION_CHUNK', { index: 0, rawText: '', base64: 'blank' });
+  await run.worker.emit('EXTRACTION_CHUNK', { index: 1, rawText: 'Readable native source text' });
+  assert.equal(await run.job, 'Readable native source text');
 });

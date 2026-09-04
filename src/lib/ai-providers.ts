@@ -16,9 +16,12 @@ export type { UsageMetadata } from './provider-usage';
 export type ContentResult = {
   text: string;
   usageMetadata?: UsageMetadata;
+  finishReason?: string;
 };
 
 export type GenerateContentOptions = {
+  costStage?: import('./cost-forecast').CostStage;
+  cacheScope?: string;
   model: string;
   systemInstruction?: string;
   promptText?: string;
@@ -31,6 +34,8 @@ export type GenerateContentOptions = {
 };
 
 export type GenerateStreamOptions = {
+  costStage?: import('./cost-forecast').CostStage;
+  cacheScope?: string;
   model: string;
   systemInstruction?: string;
   promptText: string;
@@ -75,7 +80,8 @@ const generateContentRequest = async (
         abortSignal: options.signal,
       },
     });
-    return { text: response.text || '', usageMetadata: normalizeGoogleUsage(response.usageMetadata) };
+    return { text: response.text || '', usageMetadata: normalizeGoogleUsage(response.usageMetadata),
+      finishReason: response.candidates?.[0]?.finishReason };
   }
 
   const apiKey = requireKey(credentials.openaiApiKey, 'OpenAI');
@@ -95,7 +101,8 @@ const generateContentRequest = async (
     response_format: getOpenAIResponseFormat(options.jsonMode, options.jsonSchema),
   }, { signal: options.signal });
   return {
-    text: response.choices[0].message.content || '',
+    text: response.choices[0]?.message.content || '',
+    finishReason: response.choices[0]?.finish_reason,
     usageMetadata: normalizeOpenAIUsage(response.usage),
   };
 };
@@ -134,7 +141,8 @@ async function* generateContentStreamRequest(
     let previousUsage: UsageMetadata | undefined;
     for await (const chunk of stream) {
       const currentUsage = normalizeGoogleUsage(chunk.usageMetadata);
-      yield { text: chunk.text || '', usageMetadata: getUsageDelta(currentUsage, previousUsage) };
+      yield { text: chunk.text || '', usageMetadata: getUsageDelta(currentUsage, previousUsage),
+        finishReason: chunk.candidates?.[0]?.finishReason };
       if (currentUsage) previousUsage = currentUsage;
     }
     return;
@@ -157,6 +165,7 @@ async function* generateContentStreamRequest(
   for await (const chunk of stream) {
     yield {
       text: chunk.choices?.[0]?.delta?.content || '',
+      finishReason: chunk.choices?.[0]?.finish_reason ?? undefined,
       usageMetadata: normalizeOpenAIUsage(chunk.usage),
     };
   }

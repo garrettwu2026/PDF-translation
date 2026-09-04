@@ -14,6 +14,7 @@ export async function reviewTranslatedChapter(options: Options) {
   const protectedChapter = protectContent(options.translatedChapter);
   const response = await options.generate({
     model: options.model,
+    costStage: 'chapter_review',
     promptText: buildChapterProofreadingPrompt({ ...options, translatedChapter: protectedChapter.text }),
     temperature: 0, maxOutputTokens: 16_384, jsonSchema: CHAPTER_PROOFREADING_SCHEMA,
   });

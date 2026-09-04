@@ -27,7 +27,7 @@ export default function TranslationActionPanel(props: Props) {
     ? Math.min(100, Math.round((props.currentChunk / props.totalChunks) * 100))
     : 0;
   return (
-    <div className="app-card action-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
+    <div data-testid="translation-status" data-stage={props.translationStage} className="app-card action-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
       <div className="section-heading">
         <div className="step-badge">{props.activeTab === 'translate' ? '4' : '3'}</div>
         <div>

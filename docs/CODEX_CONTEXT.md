@@ -1,6 +1,6 @@
 # Codex project context
 
-Last updated: 2026-09-03 (Asia/Taipei)
+Last updated: 2026-09-04 (Asia/Taipei)
 
 ## Product
 
@@ -114,7 +114,7 @@ npm start
 - PDF worker messages are request-scoped and use acknowledgement backpressure. Preserve cancellation and stale-response guards when changing extraction or token counting.
 - Translation requests receive an `AbortSignal`; keep provider calls, retry delays, and worker cancellation connected to the same stop action.
 - The default whole-document budget is USD 5 and the retry ceiling is user-adjustable from 1–6. Provider-reported usage and itemized cost persist in history across pause/resume. Every request checks estimated input plus an explicit output ceiling before starting; this is an approximate safeguard, not a guaranteed provider billing cap (especially for PDF input or usage missing after cancellation). Old history without usage snapshots cannot reconstruct earlier charges and shows a warning.
-- Browser history is automatically retained to the newest 25 records within an approximate 12-million-character capacity. In-progress translations checkpoint after the first chunk, every third chunk, and at completion/stop; retention scans are reserved for pruning checkpoints.
+- History retention targets 25 records / 12 million characters including intermediate response text. Unfinished translations are exempt from automatic pruning; the newest record remains protected. Every completed chunk now checkpoints; request usage/results are persisted separately before further paid work.
 - Keep model IDs, provider mapping, and displayed prices centralized in `src/lib/models.ts`; do not duplicate the catalog in UI components.
 - Respect model capability flags in `src/lib/models.ts`. GPT-5.6 currently requires the provider-default temperature, so OpenAI requests must omit custom `temperature` values.
 - Actual cost must use normalized provider usage: cached input is discounted; Gemini thinking tokens are added to billable output; OpenAI completion tokens already include reasoning and must not be added twice.
@@ -173,3 +173,14 @@ The functional workflow remains unchanged.
 - `src/lib/extract-translation-pdf.ts` 處理 request-scoped Worker／AI 擷取與 ACK、取消清理；`src/lib/review-translated-chapter.ts` 處理章節校稿的保護內容、用量回報及完整性驗證，兩者透過注入 callback 測試，不依賴 React。
 - `EpubMetadataSettings` 負責 EPUB 作者／封面設定。既有 UI、模型、定價、品質規則、歷史 schema 及下載流程保持不變。
 - 協調 hook 仍約 984 行；下一步若繼續重構，可拆歷史還原／快照與翻譯交易協調，不能僅因移出 App 就視為所有複雜度已消除。
+
+## 2026-09-04 優先可靠性項目 1–5
+
+- PDF Worker 改為一頁一單位；有足夠原生文字的頁面直接使用本機結果，稀疏頁才傳送該頁 PDF 至 Gemini OCR。OpenAI 遇到掃描頁仍會提示改用 Gemini，不暗中切換供應商。逐頁順序／覆蓋檢查與儲存完成後 ACK，最終合併再處理頁緣／斷行。
+- Provider adapters 回傳 finishReason；空白、缺少正常結束原因、length／MAX_TOKENS／過濾回應均不當成成功結果。OCR 的明確空白頁標記不進入譯文；完全空白文件停止翻譯。
+- IndexedDB 升至 v2，新增 requests store；以文件 ID、工作流程版本與精確請求雜湊快取完整階段輸出。分析、OCR、初稿、校正、補修、語意複審及章節校稿可重用；不儲存 API Key 或完整提示詞。
+- 新增 durable-requests.ts：開始前先建立請求紀錄，已知用量與完整回應存檔後才前往下個階段；快取重播不再次計費，預算超額也先保存已付費結果。串流途中收到的用量增量立即落盤。
+- 未收到最終用量的請求保留 pending／unknown；歷史顯示用量待確認。這不是供應商帳單對帳或 exactly-once 外部計費保證；中斷中的 API 可能仍已計費。
+- sourceFingerprint 使用 SHA-256。Web Locks 防止同瀏覽器／同網站不同分頁同時翻譯相同來源，刪除亦受鎖保護；不支援 Web Locks 時停止付費流程，不採不安全的 localStorage 假鎖。不同裝置／瀏覽器不共用此鎖。
+- 保存章節累積上下文、前段譯文尾段與自訂指示。已完成部分的續傳設定必須一致；未完成 PDF 重新上傳相同原檔後，可重用已完成 OCR 結果。
+- 所有新瀏覽器回歸測試皆攔截供應商 HTTP 並使用假金鑰／合成文件。正式程式沒有測試後門。快取驗證規則改動時，需同步提升 durable-requests 的 workflow version。

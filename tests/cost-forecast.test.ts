@@ -12,6 +12,11 @@ const base: ForecastOptions = {
 };
 const close = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, a + ' != ' + b);
 
+test('confirmed native-only PDF extraction incurs no planned AI extraction cost', () => {
+  const forecast = forecastDocumentCost({ ...base, extractionComplete: false, extractionNativeOnly: true });
+  assert.ok(!forecast.rows.some(row => row.stage === 'extraction'));
+});
+
 test('prompt overheads follow current templates, schemas and actual document memory', () => {
   const context = { style: 'formal', glossary: '無', characterMap: '無', plotSummary: '',
     customInstructions: '', documentType: 'novel' as const };
@@ -25,7 +30,7 @@ test('prompt overheads follow current templates, schemas and actual document mem
     > forecastDocumentCost({ ...base, promptOverheads: minimal }).remainingUsd);
 });
 
-test('analysis sampling and five-page PDF extraction batches are estimated independently', () => {
+test('analysis sampling and page-granular PDF extraction are estimated independently', () => {
   const first = forecastDocumentCost({ ...base, extractionComplete: false, extractionChunks: 2,
     analysisSourceTokens: 20000 });
   const second = forecastDocumentCost({ ...base, extractionComplete: false, extractionChunks: 4,

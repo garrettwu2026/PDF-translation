@@ -37,6 +37,8 @@ import {
 } from './provider-errors.ts';
 import { estimateTranslationOutputLimit, TranslationBudgetExceededError } from './translation-budget.ts';
 import type { CostStage } from './cost-forecast.ts';
+import { IncompleteOutputError } from './request-integrity.ts';
+import { HistoryStorageError } from './db.ts';
 
 export type ChunkTranslationResult = {
   translatedText: string;
@@ -89,6 +91,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
     preservePlaceholdersInstruction: formatProtectedContentInstruction(protectedSource.entries),
   });
   let semanticReviewAttempted = false;
+  let qualityAttempt = 0;
   const maxOutputTokens = estimateTranslationOutputLimit(annotatedSource.text);
 
   for (let attempt = 0; attempt < options.retryLimit; attempt++) {
@@ -98,6 +101,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
       options.onStage('translating', `正在翻譯初稿 (第 ${options.chunkNumber}/${options.totalChunks} 部分)...`);
       const stream = options.generateStream({
         model: options.model,
+        costStage: attempt > 0 ? 'retry' : 'draft', cacheScope: 'attempt:' + qualityAttempt,
         systemInstruction,
         promptText: buildTranslationPrompt(annotatedSource.text),
         temperature: 0.2,
@@ -118,6 +122,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
       options.onStage('correcting', `正在自我校對與更新術語 (第 ${options.chunkNumber}/${options.totalChunks} 部分)...`);
       const correctionResponse = await options.generate({
         model: options.model,
+        costStage: attempt > 0 ? 'retry' : 'correction', cacheScope: 'attempt:' + qualityAttempt,
         promptText: buildCorrectionPrompt({
           sourceText: annotatedSource.text,
           draftTranslation: draft,
@@ -145,6 +150,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         options.onStage('repairing', `正在補譯 ${missingIds.length} 個缺漏句子 (第 ${options.chunkNumber}/${options.totalChunks} 部分)...`);
         const repairResponse = await options.generate({
           model: options.model,
+          costStage: attempt > 0 ? 'retry' : 'repair', cacheScope: 'attempt:' + qualityAttempt,
           promptText: buildSentenceRepairPrompt(annotatedSource.segments, missingIds, corrected),
           temperature: 0,
           maxOutputTokens: 2_048,
@@ -183,6 +189,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
           const reviewModel = getQualityReviewModelId(options.model);
           const semanticReview = await options.generate({
             model: reviewModel,
+            costStage: 'semantic_review',
             promptText: buildSemanticReviewPrompt({
               sentences: riskySentences,
               glossary: options.glossary,
@@ -205,7 +212,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
             throw new TranslationQualityError('Semantic review changed sentence markers');
           }
         } catch (reviewError) {
-          if (isAbortError(reviewError) || reviewError instanceof TranslationBudgetExceededError) throw reviewError;
+          if (isAbortError(reviewError) || reviewError instanceof TranslationBudgetExceededError || reviewError instanceof HistoryStorageError) throw reviewError;
           if (reviewError instanceof TranslationQualityError) throw reviewError;
           options.onWarning?.('translation_selective_semantic_review_failed', { chunk: options.chunkNumber });
         }
@@ -228,16 +235,18 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
         chunkSummary: correction.chunkSummary,
       };
     } catch (error) {
-      if (isAbortError(error) || error instanceof DOMException && error.name === 'AbortError' || error instanceof TranslationBudgetExceededError) throw error;
+      if (isAbortError(error) || error instanceof DOMException && error.name === 'AbortError' || error instanceof TranslationBudgetExceededError || error instanceof HistoryStorageError) throw error;
       const providerError = classifyProviderError(error);
-      const retryable = error instanceof TranslationQualityError || isRetryableProviderError(providerError);
+      const retryable = error instanceof TranslationQualityError || error instanceof IncompleteOutputError || isRetryableProviderError(providerError);
       if (!retryable || attempt + 1 >= options.retryLimit) {
+        if (error instanceof IncompleteOutputError) throw error;
         if (error instanceof TranslationQualityError) {
           throw new Error(`翻譯失敗：模型輸出未通過完整性檢查。(${error.message})`);
         }
         throw new Error(formatProviderErrorForUser(providerError));
       }
       options.onWarning?.('translation_chunk_retry', { attempt: attempt + 1, chunk: options.chunkNumber });
+      if (error instanceof TranslationQualityError || error instanceof IncompleteOutputError) qualityAttempt++;
       const waitMilliseconds = error instanceof TranslationQualityError ? 1_000 : getRetryDelayMs(providerError, attempt);
       const waitSeconds = Math.max(1, Math.ceil(waitMilliseconds / 1000));
       options.onStage('translating', error instanceof TranslationQualityError

@@ -37,3 +37,10 @@ test('translation progress checkpoints the first, every third, and final chunk',
     .filter((chunk) => shouldCheckpointTranslationProgress(chunk, 8));
   assert.deepEqual(checkpoints, [1, 3, 6, 8]);
 });
+
+test('retention counts intermediate results and never prunes an unfinished translation', () => {
+  const old = { ...record('working', 1), status: 'translating' as const };
+  const result = selectHistoryRecordsToKeep([old, record('old', 2), { ...record('new', 3), requestCharacters: 1000 }], 1, 50);
+  assert.deepEqual(result.keep.map(item => item.id), ['new', 'working']);
+  assert.deepEqual(result.deleteIds, ['old']);
+});

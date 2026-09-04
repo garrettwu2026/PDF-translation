@@ -31,6 +31,7 @@ export type ForecastOptions = {
   promptOverheads?: Partial<Record<CostStage, number>>;
   analysisSourceTokens?: number; extractionChunks?: number; currentChunkTokens?: number;
   remainingExtractionRatio?: number;
+  extractionNativeOnly?: boolean;
 };
 
 /** Heuristic planning assumptions, not provider quotas or a billing guarantee.
@@ -52,7 +53,7 @@ export function forecastDocumentCost(options: ForecastOptions) {
       inputUsd: cost.inputUsd, outputUsd: cost.outputUsd });
   };
   const extractionRatio = Math.min(1, Math.max(0, options.remainingExtractionRatio ?? 1));
-  if (!options.extractionComplete) add('extraction',
+  if (!options.extractionComplete && !options.extractionNativeOnly) add('extraction',
     (t + (options.extractionChunks ?? n) * overhead('extraction', 500)) * extractionRatio,
     t * 1.3 * extractionRatio);
   if (!options.analysisComplete && t > 0) add('analysis', (options.analysisSourceTokens ?? Math.min(options.documentTokens ?? 0, 12500)) + overhead('analysis', 1000), 2000);

@@ -4,8 +4,11 @@ import { useApiKeySettings } from './useApiKeySettings';
 import { useDocumentCostForecast } from './useDocumentCostForecast';
 import { extractTranslationPdf } from '../lib/extract-translation-pdf';
 import { reviewTranslatedChapter } from '../lib/review-translated-chapter';
+import { contentDigest } from '../lib/request-integrity';
+import { acquireDocumentLock } from '../lib/document-lock';
+import { getHistory } from '../lib/db';
 import React, { useState, useRef, useEffect } from 'react';
-import { saveHistory, getAllHistory, deleteHistory, HistoryRecord, HistoryStorageError, shouldCheckpointTranslationProgress } from '../lib/db';
+import { saveHistory, getAllHistory, deleteHistory, HistoryRecord, HistoryStorageError } from '../lib/db';
 import { estimateTextTokens, splitMarkdownIntoTokenChunks } from '../lib/text';
 import { validateUpload } from '../lib/file-limits';
 import { buildDocumentAnalysisPrompt, DOCUMENT_ANALYSIS_SCHEMA, parseDocumentAnalysis } from '../lib/document-analysis';
@@ -27,6 +30,12 @@ import { EMPTY_NOVEL_CONTINUITY, formatNovelContinuity, getNovelCanonicalGlossar
 import { beginTranslationChunk, commitTranslationChunk, createTranslationProgress, pauseTranslationProgress } from '../lib/translation-progress';
 
 export function useTranslationWorkspace() {
+  const journalDocumentRef = useRef<string | null>(null);
+  const fingerprintRef = useRef<string | null>(null);
+  const settingsRef = useRef<string | null>(null);
+  const chapterContextRef = useRef<HistoryRecord['chapterContext']>(undefined);
+  const startingRef = useRef(false);
+  const uploadSequenceRef = useRef(0);
   const [activeTab, setActiveTab] = useState<'translate' | 'converter'>('translate');
   const [customTitle, setCustomTitle] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
@@ -92,6 +101,12 @@ export function useTranslationWorkspace() {
   };
 
   const handleLoadHistory = (record: HistoryRecord) => {
+    if (startingRef.current) return;
+    fingerprintRef.current = record.sourceFingerprint ?? null;
+    settingsRef.current = record.resumeSettings ?? null;
+    chapterContextRef.current = record.chapterContext;
+    setCustomInstructions(record.customInstructions ?? '');
+    if (record.pendingRequests) showToast('有未收到完整用量回報的請求；顯示費用僅含已知用量，請核對供應商帳單。', 'error');
     cancelEstimate();
     setCurrentFileId(record.id);
     setCustomTitle(record.title);
@@ -151,7 +166,17 @@ export function useTranslationWorkspace() {
 
   const confirmDeleteHistory = async () => {
     if (!historyToDelete) return;
-    await deleteHistory(historyToDelete);
+    if (startingRef.current) { showToast('請先停止翻譯再刪除紀錄。', 'error'); return; }
+    let release: (() => Promise<void>) | undefined;
+    try {
+      const record = await getHistory(historyToDelete);
+      if (!record) return;
+      release = await acquireDocumentLock(record.sourceFingerprint ?? await contentDigest(record.extractedText));
+      await deleteHistory(historyToDelete);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '無法刪除紀錄。', 'error');
+      return;
+    } finally { await release?.(); }
     loadHistory();
     if (currentFileId === historyToDelete) {
       setCurrentFileId(null);
@@ -220,11 +245,13 @@ export function useTranslationWorkspace() {
     getUsageSnapshot,
     generateContent: generateContentWrapper,
     generateContentStream: generateContentStreamWrapper,
+    flushRequests,
   } = useBudgetedAiProviders({
     googleApiKey: isManualKeyActive ? manualApiKey : undefined,
     openaiApiKey: isOpenaiKeyActive ? manualOpenaiApiKey : undefined,
     budgetUsd: translationBudgetUsd,
     getSignal: () => translationAbortControllerRef.current?.signal,
+    getDocumentId: () => journalDocumentRef.current,
   });
 
   useEffect(() => {
@@ -245,10 +272,10 @@ export function useTranslationWorkspace() {
     };
   }, []);
 
-  const handleFileUpload = (selectedFile: File) => {
-    if (isTranslating) {
-      translationCancelledRef.current = true;
-      translationAbortControllerRef.current?.abort();
+  const handleFileUpload = async (selectedFile: File) => {
+    if (startingRef.current || isTranslating) {
+      showToast('請先停止目前翻譯，再更換文件。', 'error');
+      return;
     }
 
     let isPdf = false;
@@ -263,6 +290,24 @@ export function useTranslationWorkspace() {
       return;
     }
 
+    if (currentFileId && !extractionComplete && fingerprintRef.current) {
+      const fingerprint = await contentDigest(await selectedFile.arrayBuffer());
+      if (fingerprint === fingerprintRef.current) {
+        setFile(selectedFile);
+        const reader = new FileReader();
+        reader.onload = () => setBase64Data((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(selectedFile);
+        setError(null);
+        showToast('已重新載入原文件；續傳會重用已完成頁面，不重複計費。');
+        return;
+      }
+      setError('這不是尚未完成擷取的原文件。請先完成原文件，或重新整理後上傳新文件。');
+      return;
+    }
+    fingerprintRef.current = null;
+    settingsRef.current = null;
+    chapterContextRef.current = undefined;
+
     cancelEstimate();
     if (extractionWorkerTaskRef.current) {
       pdfWorkerRef.current?.postMessage({ type: 'CANCEL_TASK', payload: { requestId: extractionWorkerTaskRef.current } });
@@ -271,6 +316,8 @@ export function useTranslationWorkspace() {
 
     setError(null);
     setFile(selectedFile);
+    setBase64Data(null);
+    const uploadSequence = ++uploadSequenceRef.current;
     setTranslatedText('');
     setExtractedText('');
     setTokenCount(null);
@@ -295,22 +342,26 @@ export function useTranslationWorkspace() {
 
     const reader = new FileReader();
     reader.onload = async (event) => {
+      if (uploadSequence !== uploadSequenceRef.current) return;
       const base64 = (event.target?.result as string).split(',')[1];
       setBase64Data(base64);
 
       if (isMd) {
         setTotalPages(0);
         const text = await selectedFile.text();
+        if (uploadSequence !== uploadSequenceRef.current) return;
         setExtractedText(text);
       }
     };
     reader.onerror = () => {
+      if (uploadSequence !== uploadSequenceRef.current) return;
       setError('讀取檔案失敗 (Failed to read file).');
     };
     reader.readAsDataURL(selectedFile);
   };
 
   const handleTranslate = async () => {
+    if (startingRef.current) return;
     if (!extractedText && (!file || !base64Data)) return;
     if (!extractionComplete && !file) {
       setError('PDF 文字擷取尚未完成，請重新上傳原始 PDF，避免只翻譯部分文件。');
@@ -348,6 +399,36 @@ export function useTranslationWorkspace() {
       return;
     }
 
+    startingRef.current = true;
+    let releaseLock: (() => Promise<void>) | undefined;
+    let fingerprint: string;
+    let resumeSettings: string;
+    try {
+      resumeSettings = await contentDigest(JSON.stringify({
+        version: 1, selectedModel, splitTranslation, documentType, customInstructions, chapterProofreading,
+      }));
+      fingerprint = fingerprintRef.current ?? await contentDigest(file ? await file.arrayBuffer() : extractedText);
+      releaseLock = await acquireDocumentLock(fingerprint);
+      if (!startsNewDocumentRun && currentFileId) {
+        const fresh = await getHistory(currentFileId);
+        if (!fresh || fresh.currentChunk !== startingChunk || fresh.translatedText !== translatedText) {
+          throw new Error('歷史進度已更新，請從歷史紀錄重新載入，避免覆寫其他分頁的結果。');
+        }
+        if (startingChunk > 0 && fresh.resumeSettings && fresh.resumeSettings !== resumeSettings) {
+          throw new Error('續傳設定與存檔不符，請恢復原模型、分段、文件類型、指示及校稿設定。');
+        }
+        restoreUsage(fresh.usageSnapshot);
+        if (fresh.pendingRequests) showToast('部分請求用量待確認；重試可能產生額外費用，請核對供應商帳單。', 'error');
+      }
+    } catch (error) {
+      await releaseLock?.();
+      startingRef.current = false;
+      setError(error instanceof Error ? error.message : '無法取得文件執行鎖。');
+      return;
+    }
+    fingerprintRef.current = fingerprint;
+    settingsRef.current = resumeSettings;
+
     if (startsNewDocumentRun) {
       resetUsage();
       setCostSamples([]);
@@ -375,7 +456,9 @@ export function useTranslationWorkspace() {
     const currentStartTime = Date.now();
     setStartTime(currentStartTime);
     setEstimatedRemainingTime(null);
-    const fileId = currentFileId || crypto.randomUUID();
+    const fileId = startsNewDocumentRun ? crypto.randomUUID() : currentFileId || crypto.randomUUID();
+    journalDocumentRef.current = fileId;
+    let latestChapterContext = startsNewDocumentRun ? undefined : chapterContextRef.current;
     let latestCostSamples = startsNewDocumentRun ? [] : normalizeCostSamples(costSamples);
     let latestExtractedText = extractedText;
     let latestTranslatedText = startingChunk > 0 ? translatedText : '';
@@ -414,6 +497,8 @@ export function useTranslationWorkspace() {
         pruneHistory = true,
       ) => {
         const record: HistoryRecord = {
+          sourceFingerprint: fingerprint, resumeSettings, customInstructions,
+          chapterContext: latestChapterContext,
           id: fileId,
           title: customTitle || file?.name || 'Untitled',
           author: authorName,
@@ -450,8 +535,12 @@ export function useTranslationWorkspace() {
             historyStorageWarningShownRef.current = true;
             showToast(historyError.message, 'error');
           }
+          throw historyError;
         }
       };
+
+      await saveCurrentState('translating', startingChunk, latestTotalChunks, latestExtractedText,
+        latestTranslatedText, latestTranslationStyle, latestGlossary, latestCharacterMap, latestPlotSummary);
 
       let fullMarkdown = '';
       const isMd = file?.name?.toLowerCase().endsWith('.md');
@@ -485,13 +574,14 @@ export function useTranslationWorkspace() {
             generate: generateContentWrapper,
             onUsage: usage => recordUsage(usage, selectedModel, translationBudgetUsd, 'extraction'),
             onTotal: setTotalChunks,
-            onProgress: ({ completed, total, markdown }) => {
+            onProgress: async ({ completed, total, markdown }) => {
               setCompletedExtractionChunks(completed);
               setCurrentChunk(completed);
               setStatusMessage(`正在提取文字 (已完成 ${completed}/${total} 部分)...`);
               latestTotalChunks = total;
               latestExtractedText = markdown;
               setExtractedText(markdown);
+              await saveCurrentState('translating', 0, total, markdown, '', null, '無', '', '', false);
             },
             onWarning: reportWarning,
           });
@@ -509,6 +599,8 @@ export function useTranslationWorkspace() {
       // Replace upload estimates with the actual translation source, not PDF bytes/modalities.
       cancelEstimate();
       setTokenCount(estimateTextTokens(fullMarkdown));
+      await saveCurrentState('translating', startingChunk, latestTotalChunks, fullMarkdown,
+        latestTranslatedText, latestTranslationStyle, latestGlossary, latestCharacterMap, latestPlotSummary, false);
 
       // --- STAGE 1.5: GLOSSARY GENERATION & STYLE ANALYSIS ---
       let glossaryText = glossary;
@@ -525,6 +617,7 @@ export function useTranslationWorkspace() {
         try {
           const analysisResponse = await generateContentWrapper({
             model: selectedModel,
+            costStage: 'analysis',
             promptText: buildDocumentAnalysisPrompt(fullMarkdown),
             temperature: 0,
             maxOutputTokens: 4_096,
@@ -550,7 +643,7 @@ export function useTranslationWorkspace() {
           latestNovelContinuity = seedNovelContinuity(detectedCharacters);
           setNovelContinuity(latestNovelContinuity);
         } catch (err) {
-          if (err instanceof TranslationBudgetExceededError || isAbortError(err)) throw err;
+          if (err instanceof TranslationBudgetExceededError || err instanceof HistoryStorageError || isAbortError(err)) throw err;
           reportWarning('document_analysis_failed');
           setTranslationStyle('一般/通用');
           setGlossary('無');
@@ -574,7 +667,7 @@ export function useTranslationWorkspace() {
       setTotalChunks(translationChunksCount);
 
       let fullTranslatedText = latestTranslatedText;
-      let previousTranslatedText = latestTranslatedText.slice(-1000);
+      let previousTranslatedText = latestChapterContext?.previousTranslation ?? latestTranslatedText.slice(-1000);
 
       // Start from the current chunk if resuming
       const startChunk = startingChunk;
@@ -595,12 +688,12 @@ export function useTranslationWorkspace() {
       ].filter(Boolean).join('\n\n');
       let dynamicPlotSummary = formatWorkingMemory();
       const documentTypeInstruction = getDocumentTypeInstruction(effectiveDocumentType);
-      let chapterSourceChunks: string[] = [];
-      let chapterTranslatedChunks: string[] = [];
-      let chapterStartOffset = fullTranslatedText.length;
-      let chapterNewTermCount = 0;
-      let chapterNewCharacterCount = 0;
-      let chapterQualityWarningCount = 0;
+      let chapterSourceChunks: string[] = latestChapterContext?.source.slice() ?? [];
+      let chapterTranslatedChunks: string[] = latestChapterContext?.translated.slice() ?? [];
+      let chapterStartOffset = latestChapterContext?.startOffset ?? fullTranslatedText.length;
+      let chapterNewTermCount = latestChapterContext?.terms ?? 0;
+      let chapterNewCharacterCount = latestChapterContext?.characters ?? 0;
+      let chapterQualityWarningCount = latestChapterContext?.warnings ?? 0;
 
       for (let i = startChunk; i < translationChunksCount; i++) {
         throwIfAborted(translationController.signal);
@@ -736,7 +829,7 @@ export function useTranslationWorkspace() {
               dynamicPlotSummary = formatWorkingMemory();
             }
           } catch (reviewError) {
-            if (reviewError instanceof TranslationBudgetExceededError || isAbortError(reviewError)) throw reviewError;
+            if (reviewError instanceof TranslationBudgetExceededError || reviewError instanceof HistoryStorageError || isAbortError(reviewError)) throw reviewError;
             reportWarning('chapter_proofreading_failed', { chunk: i + 1 });
           }
         }
@@ -765,9 +858,16 @@ export function useTranslationWorkspace() {
         setTranslatedText(fullTranslatedText);
         previousTranslatedText = currentChunkTranslated.slice(-1000); // Keep last 1000 chars for context
         previousSourceText = textChunks[i].slice(-1000);
+        latestChapterContext = {
+          source: chapterSourceChunks.slice(), translated: chapterTranslatedChunks.slice(),
+          startOffset: chapterStartOffset, terms: chapterNewTermCount,
+          characters: chapterNewCharacterCount, warnings: chapterQualityWarningCount,
+          previousTranslation: previousTranslatedText,
+        };
+        chapterContextRef.current = latestChapterContext;
 
         // Save progress to IndexedDB
-        if (shouldCheckpointTranslationProgress(i + 1, translationChunksCount)) {
+        {
           await saveCurrentState(
             'translating',
             i + 1,
@@ -815,6 +915,7 @@ export function useTranslationWorkspace() {
       translationMachine.transition('completed', '');
 
     } catch (err: any) {
+      await flushRequests();
       if (chunkMemoryCheckpoint) {
         latestGlossary = chunkMemoryCheckpoint.glossary;
         latestCharacterMap = chunkMemoryCheckpoint.characters;
@@ -851,6 +952,8 @@ export function useTranslationWorkspace() {
       }
       if (fileId) {
         const record: HistoryRecord = {
+          sourceFingerprint: fingerprint, resumeSettings, customInstructions,
+          chapterContext: latestChapterContext,
           id: fileId,
           title: customTitle || file?.name || 'Untitled',
           author: authorName,
@@ -889,6 +992,10 @@ export function useTranslationWorkspace() {
         translationAbortControllerRef.current = null;
       }
       translationCancelledRef.current = false;
+      await flushRequests();
+      journalDocumentRef.current = null;
+      startingRef.current = false;
+      await releaseLock?.();
     }
   };
 

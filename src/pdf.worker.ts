@@ -100,10 +100,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       const pageCount = pdfDoc.getPageCount();
       assertPdfPageLimit(pageCount);
 
-      const chunkSize = 5;
+      const chunkSize = 1;
       const totalChunks = Math.ceil(pageCount / chunkSize);
       self.postMessage({ type: 'TOTAL_CHUNKS', payload: { requestId, totalChunks, pageCount } });
 
+      try {
       for (let index = 0; index < totalChunks; index++) {
         if (cancelledTasks.has(requestId)) return;
         const startPage = index * chunkSize;
@@ -130,6 +131,9 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
             (_, offset) => startPage + offset,
           );
           const chunkPdf = await PDFDocument.create();
+          // Stable bytes allow exact-request resume without re-purchasing OCR.
+          chunkPdf.setCreationDate(new Date(0));
+          chunkPdf.setModificationDate(new Date(0));
           const copiedPages = await chunkPdf.copyPages(pdfDoc, pageIndices);
           copiedPages.forEach((page) => chunkPdf.addPage(page));
           chunkBase64 = uint8ArrayToBase64(await chunkPdf.save());
@@ -148,7 +152,9 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         await waitForAcknowledgement(requestId, 'extraction', index);
       }
 
-      await pdfjsDoc.destroy();
+      } finally {
+        await pdfjsDoc.destroy();
+      }
     }
   } catch (error: unknown) {
     if (!cancelledTasks.has(requestId)) {

@@ -3,6 +3,15 @@ import type { TranslationUsageSnapshot } from './translation-budget.ts';
 import type { CostSample } from './cost-forecast.ts';
 
 export interface HistoryRecord {
+  sourceFingerprint?: string;
+  resumeSettings?: string;
+  customInstructions?: string;
+  pendingRequests?: number;
+  requestCharacters?: number;
+  chapterContext?: {
+    source: string[]; translated: string[]; startOffset: number;
+    terms: number; characters: number; warnings: number; previousTranslation: string;
+  };
   id: string;
   title: string;
   author: string;
@@ -31,7 +40,8 @@ export interface HistoryRecord {
 
 const DB_NAME = 'pdf-translator-db';
 const STORE_NAME = 'history';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+const REQUEST_STORE = 'requests';
 export const HISTORY_MAX_RECORDS = 25;
 export const HISTORY_MAX_CHARACTERS = 12_000_000;
 export const HISTORY_CHECKPOINT_INTERVAL = 3;
@@ -73,7 +83,10 @@ export const estimateHistoryRecordCharacters = (record: HistoryRecord) =>
   + (record.plotSummary?.length ?? 0)
   + (record.novelContinuity ? JSON.stringify(record.novelContinuity).length : 0)
   + (record.usageSnapshot ? JSON.stringify(record.usageSnapshot).length : 0)
-  + (record.costSamples ? JSON.stringify(record.costSamples).length : 0);
+  + (record.costSamples ? JSON.stringify(record.costSamples).length : 0)
+  + (record.chapterContext ? JSON.stringify(record.chapterContext).length : 0)
+  + (record.customInstructions?.length ?? 0)
+  + (record.requestCharacters ?? 0);
 
 export const selectHistoryRecordsToKeep = (
   records: HistoryRecord[],
@@ -86,7 +99,8 @@ export const selectHistoryRecordsToKeep = (
   for (const record of sorted) {
     const recordCharacters = estimateHistoryRecordCharacters(record);
     const isNewest = keep.length === 0;
-    if (!isNewest && (keep.length >= maxRecords || characters + recordCharacters > maxCharacters)) continue;
+    if (!isNewest && record.status !== 'translating'
+      && (keep.length >= maxRecords || characters + recordCharacters > maxCharacters)) continue;
     keep.push(record);
     characters += recordCharacters;
   }
@@ -118,6 +132,9 @@ export const initDB = (): Promise<IDBDatabase> => {
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(REQUEST_STORE)) {
+        db.createObjectStore(REQUEST_STORE, { keyPath: 'id' }).createIndex('documentId', 'documentId');
+      }
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: 'id' });
       }
@@ -137,19 +154,27 @@ const waitForTransaction = (transaction: IDBTransaction): Promise<void> =>
 export const saveHistory = async (record: HistoryRecord, options: { prune?: boolean } = {}): Promise<void> => {
   try {
     const db = await initDB();
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const transaction = db.transaction([STORE_NAME, REQUEST_STORE], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
     if (options.prune === false) {
-      store.put(record);
+      const existing = store.get(record.id);
+      existing.onsuccess = () => store.put({ ...record, pendingRequests: existing.result?.pendingRequests ?? 0,
+        requestCharacters: existing.result?.requestCharacters ?? 0 });
       await waitForTransaction(transaction);
       return;
     }
     const request = store.getAll();
     request.onsuccess = () => {
       const existing = (request.result as HistoryRecord[]).filter((item) => item.id !== record.id);
-      const { deleteIds } = selectHistoryRecordsToKeep([...existing, record]);
-      for (const id of deleteIds) store.delete(id);
-      store.put(record);
+      const previous = (request.result as HistoryRecord[]).find(item => item.id === record.id);
+      const updated = { ...record, pendingRequests: previous?.pendingRequests ?? 0,
+        requestCharacters: previous?.requestCharacters ?? 0 };
+      const { deleteIds } = selectHistoryRecordsToKeep([...existing, updated]);
+      for (const id of deleteIds) {
+        store.delete(id);
+        deleteDocumentRequests(transaction, id);
+      }
+      store.put(updated);
     };
     request.onerror = () => transaction.abort();
     await waitForTransaction(transaction);
@@ -187,7 +212,56 @@ export const getAllHistory = async (): Promise<HistoryRecord[]> => {
 
 export const deleteHistory = async (id: string): Promise<void> => {
   const db = await initDB();
-  const transaction = db.transaction(STORE_NAME, 'readwrite');
+  const transaction = db.transaction([STORE_NAME, REQUEST_STORE], 'readwrite');
   transaction.objectStore(STORE_NAME).delete(id);
+  deleteDocumentRequests(transaction, id);
   await waitForTransaction(transaction);
 };
+
+function deleteDocumentRequests(transaction: IDBTransaction, id: string) {
+  const request = transaction.objectStore(REQUEST_STORE).index('documentId').openKeyCursor(IDBKeyRange.only(id));
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (cursor) { transaction.objectStore(REQUEST_STORE).delete(cursor.primaryKey); cursor.continue(); }
+  };
+}
+
+export type SavedRequest = {
+  id: string; documentId: string; state: 'pending' | 'complete' | 'unknown' | 'failed';
+  response?: import('./ai-providers').ContentResult;
+};
+
+export async function getSavedRequest(id: string): Promise<SavedRequest | undefined> {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(REQUEST_STORE).objectStore(REQUEST_STORE).get(id);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/** Result and cumulative known usage commit atomically, before another paid stage starts. */
+export async function saveRequest(entry: SavedRequest, usage?: TranslationUsageSnapshot) {
+  try {
+    const db = await initDB();
+    const tx = db.transaction([STORE_NAME, REQUEST_STORE], 'readwrite');
+    const requests = tx.objectStore(REQUEST_STORE);
+    const previous = requests.get(entry.id);
+    previous.onsuccess = () => {
+      const history = tx.objectStore(STORE_NAME);
+      const record = history.get(entry.documentId);
+      record.onsuccess = () => {
+        if (!record.result) { tx.abort(); return; }
+        const unresolved = (state?: string) => state === 'pending' || state === 'unknown' ? 1 : 0;
+        const pendingRequests = Math.max(0, (record.result.pendingRequests ?? 0)
+          + unresolved(entry.state) - unresolved(previous.result?.state));
+        history.put({ ...record.result, pendingRequests, timestamp: Date.now(),
+          requestCharacters: Math.max(0, (record.result.requestCharacters ?? 0)
+            + (entry.response?.text.length ?? 0) - (previous.result?.response?.text.length ?? 0)),
+          ...(usage ? { usageSnapshot: usage } : {}) });
+        requests.put(entry);
+      };
+    };
+    await waitForTransaction(tx);
+  } catch (error) { throw normalizeStorageError(error); }
+}
