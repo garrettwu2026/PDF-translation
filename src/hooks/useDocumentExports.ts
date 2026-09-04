@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { downloadBlob, downloadMarkdown, printElementToPdf, requestEpub } from '../lib/browser-exports';
+import { downloadBlob, downloadMarkdown, requestEpub } from '../lib/browser-exports';
 import { reportError } from '../lib/diagnostics';
 
 type Options = {
@@ -33,9 +33,10 @@ export function useDocumentExports(options: Options) {
     }
     setIsDownloadingPdf(true);
     try {
-      const element = document.getElementById('translation-result-content');
-      if (!element) throw new Error('找不到內容元素');
-      printElementToPdf(element, getExportTitle());
+      const text = options.activeTab === 'translate' ? options.translatedText : options.extractedText;
+      if (!text) return;
+      const { printMarkdown } = await import('../lib/markdown-print');
+      printMarkdown(text, getExportTitle());
       options.showToast('請在列印對話框中選擇「另存為 PDF」');
     } catch (error) {
       reportError('pdf_export_failed');
@@ -43,7 +44,7 @@ export function useDocumentExports(options: Options) {
     } finally {
       setIsDownloadingPdf(false);
     }
-  }, [getExportTitle, options.isIframe, options.showToast]);
+  }, [getExportTitle, options.isIframe, options.showToast, options.activeTab, options.translatedText, options.extractedText]);
 
   const downloadMarkdownFile = useCallback(() => {
     const text = options.activeTab === 'translate' ? options.translatedText : options.extractedText;

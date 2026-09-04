@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSPropertie
 import { BookOpen, ChevronDown, Copy, Download, Loader2, Maximize2, Minimize2 } from 'lucide-react';
 import type { TranslationStage } from '../lib/translation-state-machine';
 import { comparisonParagraphs, documentHeadings } from '../lib/workspace-presentation';
+import { paginatePreview, pageForLine } from '../lib/preview-pages';
+import { useThrottledPreview } from '../hooks/useThrottledPreview';
 const MarkdownPreview = lazy(() => import('./MarkdownPreview'));
 
 type Props = {
@@ -18,17 +20,36 @@ export default function DocumentResultPanel(p: Props) {
   const [lineHeight, setLineHeight] = useState(1.9);
   const [paper, setPaper] = useState('warm');
   const [comparePage, setComparePage] = useState(0);
+  const [readingPage, setReadingPage] = useState(0);
+  const [jumpTarget, setJumpTarget] = useState('');
   const exportMenu = useRef<HTMLDetailsElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const content = p.activeTab === 'translate' ? p.translatedText : p.extractedText;
+  const sourceText = useThrottledPreview(p.extractedText, p.isExtracting);
+  const translatedText = useThrottledPreview(p.translatedText, p.isTranslating);
+  const content = p.activeTab === 'translate' ? translatedText : sourceText;
   const sourcePreview = p.activeTab === 'translate' && (view === 'source' || (!content && (p.isTranslating || p.isExtracting)));
-  const preview = sourcePreview ? p.extractedText : content;
+  const preview = sourcePreview ? sourceText : content;
   const comparing = p.activeTab === 'translate' && view === 'compare';
-  const sourceRows = useMemo(() => comparing ? comparisonParagraphs(p.extractedText) : [], [comparing, p.extractedText]);
-  const translatedRows = useMemo(() => comparing ? comparisonParagraphs(p.translatedText) : [], [comparing, p.translatedText]);
+  const sourceRows = useMemo(() => comparing ? comparisonParagraphs(sourceText) : [], [comparing, sourceText]);
+  const translatedRows = useMemo(() => comparing ? comparisonParagraphs(translatedText) : [], [comparing, translatedText]);
   const pageCount = Math.max(1, Math.ceil(Math.max(sourceRows.length, translatedRows.length) / 20));
   const currentPage = Math.min(comparePage, pageCount - 1);
   const headings = useMemo(() => documentHeadings(preview), [preview]);
+  const pages = useMemo(() => comparing ? [{text: '', startLine: 1, plain: false}] : paginatePreview(preview), [preview, comparing]);
+  const shownPage = Math.min(readingPage, pages.length - 1);
+  const page = pages[shownPage];
+  useEffect(() => { setReadingPage(0); }, [p.activeTab, view]);
+  useEffect(() => {
+    if (!jumpTarget) return;
+    const focusHeading = () => {
+      const target = panelRef.current?.querySelector<HTMLElement>('#' + jumpTarget);
+      if (target) { target.scrollIntoView({block: 'start'}); target.focus({preventScroll: true}); setJumpTarget(''); }
+    };
+    focusHeading();
+    const observer = new MutationObserver(focusHeading);
+    if (panelRef.current) observer.observe(panelRef.current, {childList: true, subtree: true});
+    return () => observer.disconnect();
+  }, [jumpTarget, page]);
   useEffect(() => { setComparePage(0); }, [p.activeTab, view]);
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
@@ -42,9 +63,8 @@ export default function DocumentResultPanel(p: Props) {
   }, [p.focusMode, p.onFocusMode]);
   const download = (action: () => void) => { action(); if (exportMenu.current) exportMenu.current.open = false; };
   const navigate = (id: string) => {
-    const heading = panelRef.current?.querySelector<HTMLElement>(`#${id}`);
-    heading?.scrollIntoView({ block: 'start', behavior: 'auto' });
-    heading?.focus({ preventScroll: true });
+    setReadingPage(pageForLine(pages, Number(id.replace('reading-line-', ''))));
+    setJumpTarget(id);
   };
   return <div id="workspace-results" tabIndex={-1} ref={panelRef} className="result-column">
     <section className="result-panel">
@@ -70,6 +90,7 @@ export default function DocumentResultPanel(p: Props) {
         </div></details>
       </div>
       {!comparing && headings.length > 0 && <label className="chapter-navigation print:hidden">章節導覽<select aria-label="章節導覽" value="" onChange={e => navigate(e.target.value)}><option value="">跳至章節（{headings.length}）</option>{headings.map(h => <option key={h.id} value={h.id}>{'　'.repeat(Math.min(h.level - 1, 2))}{h.title}</option>)}</select></label>}
+      {!comparing && pages.length > 1 && <nav className="preview-pagination print:hidden" aria-label="閱讀分頁"><button disabled={shownPage === 0} onClick={() => setReadingPage(shownPage - 1)}>上一頁</button><label>閱讀頁 <select aria-label="閱讀頁碼" value={shownPage} onChange={e => setReadingPage(Number(e.target.value))}>{pages.map((_, i) => <option key={i} value={i}>{i + 1}／{pages.length}</option>)}</select></label><button disabled={shownPage === pages.length - 1} onClick={() => setReadingPage(shownPage + 1)}>下一頁</button><span>匯出仍包含完整文件</span></nav>}
       <div className={`reader-scroll paper-${paper}`} style={{ '--reader-font': `${fontSize}px`, '--reader-leading': lineHeight } as CSSProperties}>
         {sourcePreview && !comparing && <p className="preview-notice print:hidden">原文預覽 · 匯出仍使用已完成的譯文</p>}
         {comparing && <div className="comparison-view print:hidden">
@@ -81,11 +102,9 @@ export default function DocumentResultPanel(p: Props) {
           })}
           {!sourceRows.length && !translatedRows.length && <p className="muted">上傳文件後即可查看對照。</p>}
         </div>}
-        {/* Keep a complete canonical export DOM, independent of source/compare view and reader preferences. */}
-        <div className="canonical-document" hidden={comparing || sourcePreview}>
-          <article id="translation-result-content" className="prose max-w-none"><Suspense fallback={<p>正在載入預覽…</p>}><MarkdownPreview headingPrefix={!comparing && !sourcePreview ? 'reading-line-' : undefined}>{content}</MarkdownPreview></Suspense></article>
-        </div>
-        {sourcePreview && !comparing && <article className="prose max-w-none"><Suspense fallback={<p>正在載入原文…</p>}><MarkdownPreview headingPrefix="reading-line-">{p.extractedText}</MarkdownPreview></Suspense></article>}
+        {!comparing && <article id="translation-result-content" className="prose max-w-none">
+          {page.plain ? <><p className="preview-notice">大型區塊以原始文字分頁顯示；匯出保留完整格式。</p><pre className="large-block-preview">{page.text}</pre></> : <Suspense fallback={<p>正在載入預覽…</p>}><MarkdownPreview headingPrefix="reading-line-" lineOffset={page.startLine - 1}>{page.text}</MarkdownPreview></Suspense>}
+        </article>}
         {!preview && !comparing && <div className="reader-empty"><BookOpen size={48} /><h3>{p.isTranslating || p.isExtracting ? '正在準備你的文件' : '下一段旅程，從一份文件開始'}</h3><p>{p.activeTab === 'translate' ? '上傳文件並確認翻譯，結果會逐段出現在這裡。' : '上傳文件即可預覽文字，再轉換為 EPUB。'}</p><span>PDF · Markdown · EPUB 匯出</span></div>}
         {(p.isTranslating || p.isExtracting) && <p className="reader-live print:hidden"><Loader2 size={16} className="animate-spin" />{p.statusMessage || '處理中…'}</p>}
       </div>

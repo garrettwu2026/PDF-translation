@@ -222,6 +222,23 @@ progress::-webkit-progress-value { background: var(--primary); border-radius: 8p
   .app-shell .result-panel { position: static; height: auto; min-height: 0; border: 0; box-shadow: none; }
   .reader-scroll { overflow: visible; padding: 0; background: white; }
   #translation-result-content { color: #000; background: #fff; }
-  .reader-scroll > article { display: none; }
-  .canonical-document[hidden] { display: block; }
+  .reader-scroll > article { display: block; }
+
 }
+.history-storage { padding: 12px; margin-bottom: 16px; border-radius: 12px; background: var(--surface-soft, #f1f5f9); font-size: .8rem; color: var(--muted); }
+.history-storage p { margin-bottom: 8px; overflow-wrap: anywhere; }
+.history-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.history-row-actions button { min-height: 36px; }
+.history-search { display: grid; gap: 6px; margin-bottom: 12px; font-size: .85rem; }
+.history-search input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.history-row-actions button { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: .75rem; }
+@media (max-width: 640px) {
+  .history-row-actions { width: 100%; }
+  .group:has(.history-row-actions) > div { flex-wrap: wrap; }
+  .group:has(.history-row-actions) > div > button { flex-basis: 100%; }
+  .group:has(.history-row-actions) .text-xs { flex-wrap: wrap; }
+}
+.preview-pagination { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); font-size: .8rem; }
+.preview-pagination button, .preview-pagination select { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: white; }
+.preview-pagination span { color: var(--muted); font-size: .75rem; }
+.reader-scroll pre { white-space: pre-wrap; overflow-wrap: anywhere; }

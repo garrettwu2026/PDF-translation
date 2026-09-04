@@ -99,7 +99,7 @@ export const selectHistoryRecordsToKeep = (
   for (const record of sorted) {
     const recordCharacters = estimateHistoryRecordCharacters(record);
     const isNewest = keep.length === 0;
-    if (!isNewest && record.status !== 'translating'
+    if (!isNewest && record.status === 'completed'
       && (keep.length >= maxRecords || characters + recordCharacters > maxCharacters)) continue;
     keep.push(record);
     characters += recordCharacters;
@@ -150,6 +150,69 @@ const waitForTransaction = (transaction: IDBTransaction): Promise<void> =>
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error ?? new Error('Database transaction aborted'));
   });
+
+export const notifyDocumentChange = (documentId: string, pendingRequests?: number) => {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('translation-document-change', {detail: {documentId, pendingRequests}}));
+};
+
+export async function getJournalSummary(id: string) {
+  const db = await initDB();
+  const tx = db.transaction(REQUEST_STORE);
+  let available = 0, pending = 0;
+  const cursor = tx.objectStore(REQUEST_STORE).index('documentId').openCursor(id);
+  cursor.onsuccess = () => {
+    const item = cursor.result;
+    if (!item) return;
+    const value = item.value as SavedRequest;
+    if (value.response && ['complete','unknown'].includes(value.state)) available++;
+    if (['pending','unknown'].includes(value.state)) pending++;
+    item.continue();
+  };
+  await waitForTransaction(tx);
+  return {available, pending};
+}
+
+/** A consistent document + journal snapshot. Caller holds the document lock. */
+export async function readProject(id: string) {
+  const db = await initDB();
+  const tx = db.transaction([STORE_NAME, REQUEST_STORE]);
+  const record = tx.objectStore(STORE_NAME).get(id);
+  const requests = tx.objectStore(REQUEST_STORE).index('documentId').getAll(id);
+  await waitForTransaction(tx);
+  if (!record.result) throw new Error('找不到此專案。');
+  return {record: record.result as HistoryRecord, requests: requests.result as SavedRequest[]};
+}
+
+/** Atomic add-only import. Never overwrite or automatically prune existing documents. */
+export async function addProject(data: {record: HistoryRecord; requests: SavedRequest[]}) {
+  try {
+    const db = await initDB();
+    const tx = db.transaction([STORE_NAME, REQUEST_STORE], 'readwrite');
+    tx.objectStore(STORE_NAME).add(data.record);
+    for (const request of data.requests) tx.objectStore(REQUEST_STORE).add(request);
+    await waitForTransaction(tx);
+    notifyDocumentChange(data.record.id);
+  } catch (error) { throw normalizeStorageError(error); }
+}
+
+/** Explicitly clear response bodies only; keep usage and unresolved request evidence. Caller holds lock. */
+export async function clearProjectResponses(id: string) {
+  const db = await initDB();
+  const tx = db.transaction([STORE_NAME, REQUEST_STORE], 'readwrite');
+  const history = tx.objectStore(STORE_NAME);
+  const record = history.get(id);
+  record.onsuccess = () => { if (record.result) history.put({...record.result, requestCharacters: 0}); else tx.abort(); };
+  const requests = tx.objectStore(REQUEST_STORE).index('documentId').openCursor(id);
+  requests.onsuccess = () => {
+    const cursor = requests.result;
+    if (!cursor) return;
+    const {response, ...entry} = cursor.value as SavedRequest;
+    cursor.update({...entry, state: entry.state === 'complete' ? 'failed' : entry.state});
+    cursor.continue();
+  };
+  await waitForTransaction(tx);
+  notifyDocumentChange(id);
+}
 
 export const saveHistory = async (record: HistoryRecord, options: { prune?: boolean } = {}): Promise<void> => {
   try {
@@ -242,6 +305,7 @@ export async function getSavedRequest(id: string): Promise<SavedRequest | undefi
 
 /** Result and cumulative known usage commit atomically, before another paid stage starts. */
 export async function saveRequest(entry: SavedRequest, usage?: TranslationUsageSnapshot) {
+  let unresolvedCount = 0;
   try {
     const db = await initDB();
     const tx = db.transaction([STORE_NAME, REQUEST_STORE], 'readwrite');
@@ -255,6 +319,7 @@ export async function saveRequest(entry: SavedRequest, usage?: TranslationUsageS
         const unresolved = (state?: string) => state === 'pending' || state === 'unknown' ? 1 : 0;
         const pendingRequests = Math.max(0, (record.result.pendingRequests ?? 0)
           + unresolved(entry.state) - unresolved(previous.result?.state));
+        unresolvedCount = pendingRequests;
         history.put({ ...record.result, pendingRequests, timestamp: Date.now(),
           requestCharacters: Math.max(0, (record.result.requestCharacters ?? 0)
             + (entry.response?.text.length ?? 0) - (previous.result?.response?.text.length ?? 0)),
@@ -263,5 +328,6 @@ export async function saveRequest(entry: SavedRequest, usage?: TranslationUsageS
       };
     };
     await waitForTransaction(tx);
+    notifyDocumentChange(entry.documentId, unresolvedCount);
   } catch (error) { throw normalizeStorageError(error); }
 }

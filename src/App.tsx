@@ -49,14 +49,14 @@ export default function App() {
       <div className="workspace-grid">
         <aside className="control-rail"><div className="settings-region"><WorkspaceSettings w={w} /></div>
           <div className="progress-region"><WorkspaceProgress w={w} onAction={go} />
-            {w.activeTab === 'translate' && (w.file || w.extractedText) && <div className="app-card cost-card"><TranslationCostSummary isCalculating={w.isCalculating} documentTokens={w.tokenCount} forecast={w.costForecast} costBreakdown={w.costBreakdown} actualUsage={w.actualUsage} actualCost={w.actualCost} /></div>}
+            {w.activeTab === 'translate' && (w.file || w.extractedText) && <div className="app-card cost-card"><TranslationCostSummary resumeInsights={w.resumeInsights} isCalculating={w.isCalculating} documentTokens={w.tokenCount} forecast={w.costForecast} costBreakdown={w.costBreakdown} actualUsage={w.actualUsage} actualCost={w.actualCost} /></div>}
           </div>
         </aside>
         <DocumentResultPanel activeTab={w.activeTab} translatedText={w.translatedText} extractedText={w.extractedText} isTranslating={w.isTranslating} isExtracting={w.isExtracting} isCopying={w.isCopying} isDownloadingEpub={w.isDownloadingEpub} isDownloadingPdf={w.isDownloadingPdf} statusMessage={w.statusMessage} translationStage={w.translationStage} onCopy={w.handleCopyText} onDownloadEpub={() => w.downloadEpub()} onDownloadMarkdown={w.handleDownloadMarkdown} onDownloadPdf={w.downloadPdf} focusMode={focusMode} onFocusMode={setFocusMode} />
       </div>
     </main>
     <WorkspaceRunBar w={w} onBudget={() => go('budget')} onProgress={() => go('progress')} />
-    {w.showHistory && <HistoryModal records={w.history} currentFileId={w.currentFileId} onClose={() => w.setShowHistory(false)} onLoad={w.handleLoadHistory} onRequestDelete={w.handleDeleteHistory} />}
+    {w.showHistory && <HistoryModal busy={w.isTranslating || w.isExtracting} onRefresh={w.loadHistory} records={w.history} currentFileId={w.currentFileId} onClose={() => w.setShowHistory(false)} onLoad={w.handleLoadHistory} onRequestDelete={w.handleDeleteHistory} />}
     {w.historyToDelete && <DeleteHistoryDialog onCancel={() => w.setHistoryToDelete(null)} onConfirm={w.confirmDeleteHistory} />}
     {w.showInfoModal && <InfoModal onClose={() => w.setShowInfoModal(false)} />}
     {w.showKeyModal && <ApiKeyModal googleKey={w.manualApiKey} openaiKey={w.manualOpenaiApiKey} rememberOnDevice={w.rememberApiKeys} setGoogleKey={w.setManualApiKey} setOpenaiKey={w.setManualOpenaiApiKey} setRememberOnDevice={w.setRememberApiKeys} onClose={() => w.setShowKeyModal(false)} onSave={w.handleSaveApiKeys} />}

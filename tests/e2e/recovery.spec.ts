@@ -92,6 +92,41 @@ test('budget stop -> reload -> raise cap -> reuse paid stages -> export', async 
   expect((await download).suggestedFilename()).toMatch(/\.md$/);
 });
 
+test('portable backup resumes on an isolated device without repaying analysis or draft', async ({page, context, browser}) => {
+  const original = await mockProvider(context, {expensiveDraft: true});
+  await prepare(page);
+  await page.getByLabel('翻譯費用上限').fill('0.05');
+  await page.getByRole('button', {name: '確認翻譯', exact: true}).click();
+  await expect(page.getByRole('heading', {name: '文件預算不足'})).toBeVisible();
+  await page.getByTestId('history-button').click();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button', {name: '備份 recovery.md', exact: true}).click();
+  const stream = await (await downloadEvent).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(Buffer.from(chunk));
+  const backup = Buffer.concat(chunks);
+  expect(backup.toString()).not.toContain('sk-synthetic');
+  const nextContext = await browser.newContext({baseURL: 'http://127.0.0.1:4173'});
+  try {
+    const next = await nextContext.newPage();
+    const resumed = await mockProvider(nextContext);
+    await next.goto('/');
+    await next.getByTestId('history-button').click();
+    await next.getByLabel('匯入專案備份檔案').setInputFiles({name: 'backup.json', mimeType: 'application/json', buffer: backup});
+    await next.getByRole('button', {name: '確認匯入副本'}).click();
+    await next.getByRole('button', {name: '載入 recovery.md', exact: true}).click();
+    await expect(next.getByText(/下一段依目前設定驗證命中 2 筆/)).toBeVisible();
+    await next.getByTestId('api-key-button').click();
+    await next.getByLabel('OpenAI API Key（選填）：').fill('sk-synthetic-second-device');
+    await next.getByRole('button', {name: '儲存並套用'}).click();
+    await next.getByLabel('翻譯費用上限').fill('5');
+    await next.getByRole('button', {name: '確認翻譯', exact: true}).click();
+    await expect(next.getByTestId('translation-status')).toHaveAttribute('data-stage', 'completed');
+    expect(original.calls).toEqual({analysis: 1, draft: 1, correction: 0});
+    expect(resumed.calls).toEqual({analysis: 0, draft: 0, correction: 1});
+  } finally { await nextContext.close(); }
+});
+
 test('reload during correction preserves draft and reports unresolved request', async ({ page, context }) => {
   const mock = await mockProvider(context, { holdCorrection: true });
   await prepare(page);

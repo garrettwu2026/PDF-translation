@@ -2,6 +2,7 @@ import type { ContentResult, GenerateContentOptions, GenerateStreamOptions } fro
 import type { SavedRequest } from './db.ts';
 import type { TranslationUsageSnapshot } from './translation-budget.ts';
 import { assertCompleteOutput, contentDigest } from './request-integrity.ts';
+import { DEFAULT_REQUEST_MAX_OUTPUT_TOKENS } from './translation-budget.ts';
 import { throwIfAborted } from './abort.ts';
 
 type Dependencies = {
@@ -17,14 +18,14 @@ type Dependencies = {
 
 /** No keys or prompts are persisted. The exact request + workflow version is hashed.
  * Completed stage responses are local document data, not a provider prompt cache. */
+export async function savedRequestKey(documentId: string, options: GenerateContentOptions, stream: boolean) {
+  const { signal, costStage, ...request } = {...options, maxOutputTokens: options.maxOutputTokens ?? DEFAULT_REQUEST_MAX_OUTPUT_TOKENS};
+  return documentId + ':' + await contentDigest(JSON.stringify({version: 1, stream, request}));
+}
 export function durableRequests(deps: Dependencies) {
-  const key = async (options: GenerateContentOptions, stream: boolean) => {
-    const { signal, costStage, ...request } = options;
-    return deps.documentId + ':' + await contentDigest(JSON.stringify({ version: 1, stream, request }));
-  };
   const begin = async (options: GenerateContentOptions, stream: boolean) => {
     if (options.signal) throwIfAborted(options.signal);
-    const id = await key(options, stream);
+    const id = await savedRequestKey(deps.documentId, options, stream);
     const previous = await deps.get(id);
     if (previous?.response && (previous.state === 'complete' || previous.state === 'unknown')) {
       assertCompleteOutput(previous.response);

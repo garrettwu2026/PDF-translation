@@ -1,4 +1,5 @@
-import type { MouseEvent } from 'react';
+import { useState, type MouseEvent } from 'react';
+import ProjectHistoryTools, { useHistoryActivity } from './ProjectHistoryTools';
 import { AlertCircle, CheckCircle2, Clock, History, Loader2, Trash2, X } from 'lucide-react';
 import { HISTORY_MAX_RECORDS, type HistoryRecord } from '../lib/db';
 import AccessibleDialog from './AccessibleDialog';
@@ -6,12 +7,17 @@ import AccessibleDialog from './AccessibleDialog';
 type HistoryModalProps = {
   records: HistoryRecord[];
   currentFileId: string | null;
+  busy?: boolean;
+  onRefresh: () => void;
   onClose: () => void;
   onLoad: (record: HistoryRecord) => void;
   onRequestDelete: (id: string, event: MouseEvent) => void;
 };
 
-export function HistoryModal({ records, currentFileId, onClose, onLoad, onRequestDelete }: HistoryModalProps) {
+export function HistoryModal({ records, currentFileId, onClose, onLoad, onRequestDelete, busy = false, onRefresh }: HistoryModalProps) {
+  const [search, setSearch] = useState('');
+  const isActive = useHistoryActivity(records);
+  const filtered = records.filter(record => record.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   return (
     <AccessibleDialog labelledBy="history-dialog-title" onClose={onClose} className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50">
@@ -19,28 +25,32 @@ export function HistoryModal({ records, currentFileId, onClose, onLoad, onReques
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg" aria-label="關閉歷史紀錄"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-6">
+          <label className="history-search">搜尋專案<input aria-label="搜尋歷史紀錄" value={search} onChange={e => setSearch(e.target.value)} /></label>
+          <ProjectHistoryTools records={records} busy={busy} refresh={onRefresh}>{tools => <>
           {records.length === 0 ? (
             <div className="text-center py-12 text-slate-500"><History className="w-12 h-12 mx-auto mb-3 opacity-20" /><p>尚無歷史紀錄</p></div>
           ) : (
-            <div className="space-y-3">{records.map((record) => (
+            <div className="space-y-3">{filtered.map((record) => (
               <div key={record.id} className={`p-4 rounded-xl border transition-all group ${currentFileId === record.id ? 'bg-blue-900/20 border-blue-500/50 shadow-[0_0_15px_rgba(37,99,235,0.1)]' : 'bg-slate-800/50 border-slate-700 hover:bg-slate-800 hover:border-slate-600'}`}>
                 <div className="flex items-start justify-between gap-4">
-                  <button onClick={() => onLoad(record)} className="flex-1 min-w-0 text-left rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" aria-label={`載入 ${record.title}`}>
+                  <button disabled={busy || tools.operating || isActive(record)} onClick={() => onLoad(record)} className="flex-1 min-w-0 text-left rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" aria-label={`載入 ${record.title}`}>
                     <h3 className="font-medium text-slate-200 truncate mb-1">{record.title}</h3>
                     {!!record.pendingRequests && <p className="text-xs text-amber-600 mb-2">有 {record.pendingRequests} 筆請求用量待確認；費用僅包含已知用量。</p>}
                     <div className="flex items-center gap-3 text-xs text-slate-400">
                       <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" />{new Date(record.timestamp).toLocaleString()}</span>
                       <span className="flex items-center gap-1">
-                        {record.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : record.status === 'error' ? <AlertCircle className="w-3.5 h-3.5 text-red-500" /> : <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />}
-                        {record.status === 'completed' ? '已完成' : record.status === 'error' ? '錯誤' : `翻譯中 (${record.currentChunk}/${record.totalChunks})`}
+                        {isActive(record) ? <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" /> : record.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : record.status === 'error' ? <AlertCircle className="w-3.5 h-3.5 text-red-500" /> : <Clock className="w-3.5 h-3.5" />}
+                        {isActive(record) ? '執行中（此瀏覽器）' : record.status === 'completed' ? '已完成' : `可續傳 (${record.currentChunk}/${record.totalChunks})`}
                       </span>
                     </div>
                   </button>
-                  <button onClick={(event) => onRequestDelete(record.id, event)} className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label={`刪除 ${record.title}`}><Trash2 className="w-4 h-4" /></button>
+                  <div className="history-row-actions"><button disabled={tools.operating || isActive(record)} onClick={() => tools.exportProject(record.id)} aria-label={`備份 ${record.title}`}>備份</button><button disabled={tools.operating || isActive(record) || !record.requestCharacters} onClick={() => tools.clearProject(record.id)} aria-label={`清理中間結果 ${record.title}`}>清理快取</button><button disabled={tools.operating || isActive(record)} onClick={(event) => onRequestDelete(record.id, event)} className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors " aria-label={`刪除 ${record.title}`}><Trash2 className="w-4 h-4" /></button></div>
                 </div>
               </div>
             ))}</div>
           )}
+          {records.length > 0 && filtered.length === 0 && <p className="muted">找不到符合的專案。</p>}
+          </>}</ProjectHistoryTools>
         </div>
         <div className="border-t border-slate-800 px-6 py-3 text-xs text-slate-500">
           已保存 {records.length}/{HISTORY_MAX_RECORDS} 筆；超限時清理舊紀錄及中間結果，未完成翻譯暫不自動移除。

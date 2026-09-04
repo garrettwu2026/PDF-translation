@@ -32,6 +32,7 @@ export type ForecastOptions = {
   analysisSourceTokens?: number; extractionChunks?: number; currentChunkTokens?: number;
   remainingExtractionRatio?: number;
   extractionNativeOnly?: boolean;
+  cachedStages?: {stage: CostStage; model: string}[];
 };
 
 /** Heuristic planning assumptions, not provider quotas or a billing guarantee.
@@ -88,9 +89,14 @@ export function forecastDocumentCost(options: ForecastOptions) {
   // Overspend on one chunk must not erase the budget for all the untouched chunks.
   const currentShare = t > 0 ? Math.min(1, (options.currentChunkTokens ?? t / n) / t) : 0;
   const inFlightCreditUsd = Math.min((pipelineUsd + calibrationUsd) * currentShare, Math.max(0, options.inFlightUsd ?? 0));
-  const remainingUsd = setupUsd + pipelineUsd + calibrationUsd - inFlightCreditUsd;
+  const cached = new Set((options.cachedStages ?? []).map(row => row.stage + ':' + row.model));
+  const cacheSetupUsd = sum(rows.filter(row => row.stage === 'analysis' && cached.has(row.stage + ':' + row.model)));
+  const cachePipelineUsd = sum(rows.filter(row => !['analysis','extraction','retry','chapter_review'].includes(row.stage) && cached.has(row.stage + ':' + row.model))) * currentShare;
+  // Current-stage usage credit and replay credit may describe the same work; never subtract twice.
+  const cacheCreditUsd = cacheSetupUsd + Math.min(Math.max(0, pipelineUsd + calibrationUsd), cachePipelineUsd);
+  const remainingUsd = Math.max(0, setupUsd + pipelineUsd + calibrationUsd - Math.max(inFlightCreditUsd, cacheCreditUsd));
   const lowUsd = options.spentUsd + remainingUsd * (calibrated ? 0.75 : 0.6);
   const highUsd = options.spentUsd + remainingUsd * (calibrated ? 1.5 : 2);
   return { known, rows, remainingUsd, totalUsd: options.spentUsd + remainingUsd,
-    lowUsd, highUsd, calibrated, sampleCount: samples.length, calibrationUsd, inFlightCreditUsd };
+    lowUsd, highUsd, calibrated, sampleCount: samples.length, calibrationUsd, inFlightCreditUsd, cacheCreditUsd };
 }

@@ -29,6 +29,7 @@ export default function AccessibleDialog({ labelledBy, onClose, children, classN
     (focusable ?? dialog)?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if ([...document.querySelectorAll('[role="dialog"]')].at(-1) !== dialog) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         onCloseRef.current();

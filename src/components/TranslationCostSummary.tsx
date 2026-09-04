@@ -3,6 +3,7 @@ import { getModelConfig, USD_TO_TWD } from '../lib/models';
 import { COST_STAGE_LABELS, type CostBreakdown, type forecastDocumentCost } from '../lib/cost-forecast';
 
 type Props = {
+  resumeInsights?: {pending: number; available: number; plan: {matches: number}};
   isCalculating: boolean;
   documentTokens: number | null;
   forecast: ReturnType<typeof forecastDocumentCost>;
@@ -16,7 +17,7 @@ type Props = {
 const usd = (value: number) => '$' + value.toFixed(4);
 
 export default function TranslationCostSummary({
-  isCalculating, documentTokens, forecast, costBreakdown, actualUsage, actualCost,
+  isCalculating, documentTokens, forecast, costBreakdown, actualUsage, actualCost, resumeInsights,
 }: Props) {
   const rows = [...costBreakdown];
   for (const planned of forecast.rows) {
@@ -24,6 +25,7 @@ export default function TranslationCostSummary({
       rows.push({ ...planned, inputUsd: 0, outputUsd: 0 });
     }
   }
+  const extraUsd = costBreakdown.filter(row => ['retry', 'semantic_review', 'chapter_review'].includes(row.stage)).reduce((sum, row) => sum + row.inputUsd + row.outputUsd, 0);
   const hasUsage = actualUsage.inputTokens > 0 || actualUsage.outputTokens > 0;
   return (
     <section className="mt-6 bg-slate-950/50 rounded-xl p-4 border border-slate-800 shadow-inner" aria-label="文件成本預測">
@@ -50,6 +52,10 @@ export default function TranslationCostSummary({
           : '先依各階段、模型與上下文估算；完成至少 3 段後，逐步加入實測校正。'}</p>
         <p className="text-[11px] text-slate-500">範圍為規劃參考，非統計信賴區間或最高費用保證。推理、補修與重試可能超出預期；已花費依 API 回報用量及內建價格計算，最終以供應商帳單為準。</p>
       </div>
+      {!!resumeInsights?.pending && <p role="status" className="text-xs text-amber-700 mt-3">有 {resumeInsights.pending} 筆請求用量未確認，已花費可能低估；請核對供應商帳單，續傳不代表這些請求免費。</p>}
+      {!!resumeInsights?.available && <p className="text-xs text-slate-500 mt-3">已儲存 {resumeInsights.available} 筆中間結果；下一段依目前設定驗證命中 {resumeInsights.plan.matches} 筆。其餘快取不預先扣抵。</p>}
+      {forecast.cacheCreditUsd > 0 && <p className="text-xs text-slate-500 mt-2">已驗證快取的規劃扣抵：{usd(forecast.cacheCreditUsd)}（與已計費扣抵取較大值，避免重複扣除；非帳單折扣）</p>}
+      {actualCost.totalUsd > 0 && <p className="text-xs text-slate-500 mt-2">重試與複審已花費 {usd(extraUsd)}，約佔已知總費用 {(extraUsd / actualCost.totalUsd * 100).toFixed(1)}%。</p>}
       {(rows.length > 0 || hasUsage) && (
         <details className="mt-4 border-t border-slate-800 pt-3">
           <summary className="cursor-pointer text-xs font-medium text-slate-400">查看階段／模型與用量明細</summary>

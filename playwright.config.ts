@@ -12,9 +12,9 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: process.env.E2E_SERVER_COMMAND || 'npm run dev',
+    command: process.env.E2E_SERVER_COMMAND || 'npm start',
     url: 'http://127.0.0.1:4173',
-    env: { PORT: '4173', NODE_ENV: 'test' },
+    env: { PORT: '4173', NODE_ENV: 'production' },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

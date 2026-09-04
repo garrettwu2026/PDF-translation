@@ -3,7 +3,7 @@ import { estimateTextTokens, splitMarkdownIntoTokenChunks } from '../lib/text';
 import { sampleDocumentForAnalysis } from '../lib/document-analysis';
 import { resolveDocumentType, type DocumentTypeId, type DetectedDocumentType } from '../lib/document-types';
 import { formatNovelContinuity, type NovelContinuityMemory } from '../lib/novel-continuity';
-import { forecastDocumentCost, type CostSample } from '../lib/cost-forecast';
+import { forecastDocumentCost, type CostSample, type CostStage } from '../lib/cost-forecast';
 import { estimatePromptOverheads } from '../lib/cost-prompts';
 
 type Options = { extractionComplete: boolean; extractedText: string; splitTranslation: boolean;
@@ -13,10 +13,11 @@ type Options = { extractionComplete: boolean; extractedText: string; splitTransl
   resolvedDocumentType: DetectedDocumentType | null; selectedModel: string;
   analysisComplete: boolean; chapterProofreading: boolean; totalPages: number;
   completedExtractionChunks: number; translationRetryLimit: number;
-  actualCost: { totalUsd: number }; costSamples: CostSample[]; inFlightStartUsd: number | null; };
+  actualCost: { totalUsd: number }; costSamples: CostSample[]; inFlightStartUsd: number | null;
+  cachedStages?: {stage: CostStage; model: string}[]; };
 
 /** Shared by the display and budget preflight; segmentation remains memoized. */
-export function useDocumentCostForecast({ extractionComplete, extractedText, splitTranslation, tokenCount, completedCostChunks, translationStyle, glossary, characterMap, plotSummary, customInstructions, novelContinuity, documentType, resolvedDocumentType, selectedModel, analysisComplete, chapterProofreading, totalPages, completedExtractionChunks, translationRetryLimit, actualCost, costSamples, inFlightStartUsd }: Options) {
+export function useDocumentCostForecast({ extractionComplete, extractedText, splitTranslation, tokenCount, completedCostChunks, translationStyle, glossary, characterMap, plotSummary, customInstructions, novelContinuity, documentType, resolvedDocumentType, selectedModel, analysisComplete, chapterProofreading, totalPages, completedExtractionChunks, translationRetryLimit, actualCost, costSamples, inFlightStartUsd, cachedStages }: Options) {
   // Cache book segmentation; streaming preview updates must not rescan the entire book.
   const sourceChunkTokens = useMemo(() => extractionComplete && extractedText
     ? (splitTranslation ? splitMarkdownIntoTokenChunks(extractedText, 1800) : [extractedText]).map(estimateTextTokens)
@@ -37,6 +38,7 @@ export function useDocumentCostForecast({ extractionComplete, extractedText, spl
     customInstructions, documentType: forecastDocumentType,
   }), [translationStyle, glossary, characterMap, plotSummary, novelContinuity, customInstructions, forecastDocumentType]);
   const forecastOptions = {
+    cachedStages,
     model: selectedModel, documentTokens: tokenCount, remainingTokens: remainingSourceTokens,
     remainingChunks: sourceChunkTokens.length ? Math.max(0, sourceChunkTokens.length - completedCostChunks) : estimatedSourceChunks,
     extractionComplete, analysisComplete, chapterReview: chapterProofreading,

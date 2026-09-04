@@ -1,4 +1,5 @@
 import { useDocumentConverter } from './useDocumentConverter';
+import { useResumeInsights } from './useResumeInsights';
 import { useSourceTokenEstimate } from './useSourceTokenEstimate';
 import { useApiKeySettings } from './useApiKeySettings';
 import { useDocumentCostForecast } from './useDocumentCostForecast';
@@ -371,6 +372,7 @@ export function useTranslationWorkspace() {
 
   const handleTranslate = async () => {
     if (startingRef.current) return;
+    if (resumeInsights.checking) { showToast('正在檢查可重用階段，請稍候再開始。'); return; }
     if (!extractedText && (!file || !base64Data)) return;
     if (!extractionComplete && !file) {
       setError('PDF 文字擷取尚未完成，請重新上傳原始 PDF，避免只翻譯部分文件。');
@@ -393,6 +395,7 @@ export function useTranslationWorkspace() {
       analysisComplete: startingChunk > 0 && analysisComplete,
       samples: startsNewDocumentRun ? [] : costSamples,
       inFlightUsd: 0,
+      cachedStages: startsNewDocumentRun ? [] : resumeInsights.plan.stages,
     });
     if (preflight.known && translationBudgetUsd > 0 && preflight.totalUsd > translationBudgetUsd) {
       setError(`預估完成後整份文件約 $${preflight.totalUsd.toFixed(2)} USD（規劃範圍 $${preflight.lowUsd.toFixed(2)}–$${preflight.highUsd.toFixed(2)}），超過目前 $${translationBudgetUsd.toFixed(2)} USD 上限。請調高文件上限或選擇較省成本的模型；估算不代表帳單保證。`);
@@ -1048,8 +1051,11 @@ export function useTranslationWorkspace() {
   });
 
   const selectedModelData = getModelConfig(selectedModel);
+  const resumeInsights = useResumeInsights(currentFileId, isTranslating, completedCostChunks, lastSavedAt,
+    {selectedModel, splitTranslation, documentType, customInstructions, chapterProofreading}, translationRetryLimit);
 
   const { sourceChunkTokens, estimatedSourceChunks, forecastOptions, costForecast } = useDocumentCostForecast({
+    cachedStages: resumeInsights.plan.stages,
     extractionComplete,
     extractedText,
     splitTranslation,
@@ -1085,7 +1091,7 @@ export function useTranslationWorkspace() {
     customInstructions, setCustomInstructions, isExtracting, extractedText,
     selectedModel, setSelectedModel, splitTranslation, setSplitTranslation,
     file, tokenCount, translationBudgetUsd, setTranslationBudgetUsd,
-    translationRetryLimit, setTranslationRetryLimit, isCalculating, isTranslating,
+    translationRetryLimit, setTranslationRetryLimit, isCalculating: isCalculating || resumeInsights.checking, isTranslating,
     translationStage, currentChunk, totalChunks, totalPages,
     translatedText, translationStyle, statusMessage, documentType,
     setDocumentType, chapterProofreading, setChapterProofreading, toast,
@@ -1101,7 +1107,7 @@ export function useTranslationWorkspace() {
     showInfoModal, setShowInfoModal, estimatedRemainingTime, actualCost,
     costBreakdown, handleSaveApiKeys, handleFileUpload, handleTranslate,
     handleCancelTranslation, handlePdfToEpub, selectedModelData, costForecast,
-    actualUsage, completedCostChunks, saveStatus, lastSavedAt,
+    actualUsage, completedCostChunks, saveStatus, lastSavedAt, loadHistory, resumeInsights,
   };
 }
 

@@ -197,3 +197,13 @@ The functional workflow remains unchanged.
 - 閱讀室提供原文／譯文／段落對照、ATX／Setext 章節跳轉、字級／行距／三種紙張與專注閱讀（Escape 退出）。對照依空白行與順序並列，每頁 20 組；不是精確語意對齊，也不能用空欄判定漏譯。
 - PDF 始終使用完整 canonical `translation-result-content`，即使目前顯示原文／對照亦不混入它們；閱讀樣式置於祖先元素，不進入 PDF clone。Markdown／EPUB 仍以原本完整字串匯出。
 - UI 沒有新增付費 AI 請求、模型／價格更新、背景翻譯或跨裝置同步。舊 TranslationActionPanel 已由新元件取代，Git 歷史可還原。
+
+## 2026-09-04 優先優化 1–5：效能、可攜備份、歷史、成本與 CI
+
+- 閱讀預覽改為 Markdown 區塊感知分頁（目標每頁 12,000 字元；超大單一區塊以純文字切頁），串流預覽 250ms 更新一次。章節 ID 保留全文件行號。翻譯分段與完整來源字串不變。
+- 取代前述常駐 canonical DOM：PDF 匯出時才動態建立完整 Markdown DOM，複製至列印 iframe 後清除；MD／EPUB 保持全文匯出。直接瀏覽器列印只有目前閱讀頁，全文請使用匯出 PDF。段落對照仍為每頁 20 組，非語意對齊。
+- 歷史提供搜尋、容量估算、明確可續傳／本瀏覽器執行中狀態、手機可見刪除與手動清理快取。清理保留原文、提交譯文、記憶、費用帳本和未確認請求證據；重新取得已清內容可能再次計費。未完成紀錄不再自動淘汰。
+- project-backup.ts 使用白名單、版本 1、SHA-256 完整性碼與 100 MB 上限。匯出包含文件、進度、記憶、已知費用、付費中間結果；排除金鑰設定、provider usageMetadata 等未知欄位。未加密；完整性碼不是來源認證。匯入先確認，使用新 ID 原子新增副本，不覆寫、不自動翻譯；pending 轉 unknown，不捏造計費完成。
+- 備份不含原始 PDF；未完成擷取需要原檔。另一裝置仍需自行設定金鑰。這是手動可攜備份，不是雲端同步；Web Lock 仍只保護同瀏覽器。
+- resume-cache-plan.ts 以原流程精確請求雜湊只讀試走下一段，第一筆缺失即停止，不帶金鑰、不發網路請求、不寫 DB。相同設定才扣抵已驗證階段，OCR／章節校稿保守不扣抵；與進行中已計費扣抵取較大值避免雙算。費用仍屬規劃估算，未確認用量需核對供應商帳單。
+- CI 對 PR／main push 執行 npm ci、npm run check（typecheck／unit／production build）、Chromium E2E；Playwright 啟動 NODE_ENV=production 的 npm start。開發者單獨執行 E2E 前須先 build。
