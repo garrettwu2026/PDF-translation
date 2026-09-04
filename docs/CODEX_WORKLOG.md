@@ -208,3 +208,13 @@ All dates use Asia/Taipei unless noted otherwise.
 - 驗證：bundled Node 執行 TypeScript、134 項單元測試、正式 Vite build 全通過；使用獨立測試 Chrome profile 執行 6 項 Playwright E2E 全通過。覆蓋預算停止／重新整理／續傳／匯出、校對途中重新整理、雙分頁互斥與停止釋鎖、混合 PDF 單頁 OCR／截斷重試，以及已付費章節校稿重用。
 - E2E 使用合成 PDF／Markdown、假金鑰與攔截的供應商 HTTP；沒有發出真實付費翻譯。未驗證真實掃描書 OCR 準確率；具文字層但同頁含其他圖片文字的混合頁仍可能需要更細緻的版面分析。
 - 限制：瀏覽器關閉後不會繼續執行；跨裝置不共用鎖；失聯請求可能已被供應商計費，待確認紀錄不是精確帳單或遠端 exactly-once 保證。
+
+## 2026-09-04 — 全面 UI 與閱讀工作台加強
+
+- 重整上傳→設定→執行的資訊層級；抽出 WorkspaceSettings、WorkspaceProgress、WorkspaceRunBar，替換舊 TranslationActionPanel（Git 可恢復），App 專注組裝／UI 導覽。
+- 固定費用與執行列，直接聚焦預算設定；手機設定／進度／結果切換，390px 與 320px 無橫向溢出。錯誤提示提供預算、金鑰、原檔與儲存的對應入口，不自動重跑。
+- 區分提交完成的段數、當前處理步驟與最近成功保存時間；保存失敗不顯示已保存。載入歷史與新文件時同步重設顯示狀態。
+- 新增閱讀設定、暖色／白色／薄荷紙張、專注模式、原文檢視、按順序分頁段落對照與章節跳轉；對照不是語意對齊，不當作品質判定。
+- 匯出選單保留複製／MD／PDF／EPUB。完整 canonical DOM 與閱讀設定隔離，原文與對照模式仍只匯出譯文。統一語意配色、提高通知對比、修正手機 sticky 與無障礙按鈕名稱。
+- 驗證：138 項單元測試、TypeScript 與正式 Vite build 通過；10 項 Playwright E2E 通過，涵蓋既有恢復／計費／鎖與新章節、分頁、紙張、專注、手機、直接錯誤入口、儲存失敗、PDF／EPUB 輸出隔離。桌面與手機截圖已人工檢視。
+- 未修改 provider 請求、模型價格、翻譯品質規則或歷史 schema；不產生真實 AI 費用。移除的舊元件可從 Git 歷史恢復。

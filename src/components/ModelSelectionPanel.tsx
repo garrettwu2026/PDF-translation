@@ -30,7 +30,7 @@ export default function ModelSelectionPanel({
   return (
     <div className="app-card model-card bg-slate-900 p-6 rounded-2xl shadow-lg shadow-black/20 border border-slate-800">
       <div className="section-heading">
-        <div className="step-badge">1</div>
+        <div className="step-badge">2</div>
         <div>
           <h2 className="text-lg font-semibold text-slate-200">選擇 AI 模型</h2>
           <p className="text-xs text-slate-500 mt-0.5">依照品質、速度和預算選擇</p>
@@ -57,7 +57,8 @@ export default function ModelSelectionPanel({
         </optgroup>
       </select>
 
-      <div className="selected-model mt-4 rounded-xl border border-slate-800 p-4">
+      <details className="selected-model mt-4 rounded-xl border border-slate-800 p-4">
+        <summary>模型單價與資訊</summary>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -73,7 +74,7 @@ export default function ModelSelectionPanel({
           <div><span>輸出</span><strong>${selectedModelData.outputPrice}</strong></div>
         </div>
         <p className="text-[11px] text-slate-500 mt-3">每 1M tokens{selectedModelData.priceNote ? `・${selectedModelData.priceNote}` : ''}</p>
-      </div>
+      </details>
 
       <ModelCatalogNotice />
       <TranslationLimits

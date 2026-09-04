@@ -52,6 +52,8 @@ export function useTranslationWorkspace() {
   const translationStage = translationMachine.state.stage;
   const [glossary, setGlossary] = useState<string>('');
   const [currentChunk, setCurrentChunk] = useState(0);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [completedCostChunks, setCompletedCostChunks] = useState(0);
   const [completedExtractionChunks, setCompletedExtractionChunks] = useState(0);
   const [costSamples, setCostSamples] = useState<CostSample[]>([]);
@@ -109,6 +111,10 @@ export function useTranslationWorkspace() {
     if (record.pendingRequests) showToast('有未收到完整用量回報的請求；顯示費用僅含已知用量，請核對供應商帳單。', 'error');
     cancelEstimate();
     setCurrentFileId(record.id);
+    setSaveStatus('saved');
+    setLastSavedAt(record.timestamp);
+    translationMachine.transition(record.status === 'completed' ? 'completed' : 'paused', '');
+    setError(null);
     setCustomTitle(record.title);
     setAuthorName(record.author || '');
     setCoverImage(record.coverImage);
@@ -316,6 +322,9 @@ export function useTranslationWorkspace() {
 
     setError(null);
     setFile(selectedFile);
+    setSaveStatus('idle');
+    translationMachine.reset();
+    setLastSavedAt(null);
     setBase64Data(null);
     const uploadSequence = ++uploadSequenceRef.current;
     setTranslatedText('');
@@ -525,12 +534,16 @@ export function useTranslationWorkspace() {
           budgetUsd: translationBudgetUsd,
         };
         try {
+          setSaveStatus('saving');
           await saveHistory(record, { prune: pruneHistory });
+          setLastSavedAt(Date.now());
+          setSaveStatus('saved');
           if (status === 'completed' || pruneHistory) {
             void loadHistory();
           }
         } catch (historyError) {
           reportWarning('translation_progress_save_failed');
+          setSaveStatus('error');
           if (historyError instanceof HistoryStorageError && !historyStorageWarningShownRef.current) {
             historyStorageWarningShownRef.current = true;
             showToast(historyError.message, 'error');
@@ -980,10 +993,14 @@ export function useTranslationWorkspace() {
           budgetUsd: translationBudgetUsd,
         };
         try {
+          setSaveStatus('saving');
           await saveHistory(record);
+          setLastSavedAt(Date.now());
+          setSaveStatus('saved');
           void loadHistory();
         } catch (historyError) {
           reportWarning('translation_stop_state_save_failed');
+          setSaveStatus('error');
         }
       }
     } finally {
@@ -1084,7 +1101,7 @@ export function useTranslationWorkspace() {
     showInfoModal, setShowInfoModal, estimatedRemainingTime, actualCost,
     costBreakdown, handleSaveApiKeys, handleFileUpload, handleTranslate,
     handleCancelTranslation, handlePdfToEpub, selectedModelData, costForecast,
-    actualUsage,
+    actualUsage, completedCostChunks, saveStatus, lastSavedAt,
   };
 }
 

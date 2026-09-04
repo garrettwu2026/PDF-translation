@@ -52,13 +52,13 @@ export default function WorkspaceHeader({
           </div>
         </div>
         <div className="header-actions flex items-center gap-2">
-          <button onClick={onShowInfo} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner">
+          <button aria-label="使用說明" onClick={onShowInfo} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner">
             <Info className="w-4 h-4" /><span className="hidden sm:inline">使用說明</span>
           </button>
-          <button onClick={onShowKeys} data-testid="api-key-button" className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner">
+          <button aria-label="API Key 設定" onClick={onShowKeys} data-testid="api-key-button" className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner">
             <Key className="w-4 h-4" /><span className="hidden sm:inline">API Key</span>
           </button>
-          <button onClick={onShowHistory} data-testid="history-button" className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner">
+          <button aria-label="歷史紀錄" onClick={onShowHistory} data-testid="history-button" className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-medium transition-colors border border-slate-700 shadow-inner">
             <History className="w-4 h-4" /><span className="hidden sm:inline">歷史紀錄</span>
           </button>
           {hasActiveKey && (

@@ -75,13 +75,16 @@ test('budget stop -> reload -> raise cap -> reuse paid stages -> export', async 
   await prepare(page);
   await page.getByLabel('翻譯費用上限').fill('0.05');
   await page.getByRole('button', { name: '確認翻譯', exact: true }).click();
-  await expect(page.getByText(/已安全停止並保留進度/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: '文件預算不足' })).toBeVisible();
+  await page.getByRole('button', {name: '調整上限', exact: true}).click();
+  await expect(page.getByLabel('翻譯費用上限')).toBeFocused();
   expect(mock.calls).toEqual({ analysis: 1, draft: 1, correction: 0 });
   await page.reload();
   await loadHistory(page);
   await page.getByLabel('翻譯費用上限').fill('5');
   await page.getByRole('button', { name: '確認翻譯', exact: true }).click();
   await expect(page.getByTestId('translation-status')).toHaveAttribute('data-stage', 'completed');
+  await page.locator('.export-menu > summary').click();
   await expect(page.getByRole('button', { name: '下載 MD', exact: true })).toBeEnabled();
   expect(mock.calls).toEqual({ analysis: 1, draft: 1, correction: 1 });
   const download = page.waitForEvent('download');
@@ -99,6 +102,7 @@ test('reload during correction preserves draft and reports unresolved request', 
   await loadHistory(page);
   await page.getByRole('button', { name: '確認翻譯', exact: true }).click();
   await expect(page.getByTestId('translation-status')).toHaveAttribute('data-stage', 'completed');
+  await page.locator('.export-menu > summary').click();
   await expect(page.getByRole('button', { name: '下載 MD', exact: true })).toBeEnabled();
   expect(mock.calls.analysis).toBe(1);
   expect(mock.calls.draft).toBe(1);
@@ -115,7 +119,7 @@ test('two tabs cannot translate identical file concurrently; stop releases the l
   const second = await context.newPage();
   await prepare(second);
   await second.getByRole('button', { name: '確認翻譯', exact: true }).click();
-  await expect(second.getByText(/另一個分頁正在翻譯這份文件/)).toBeVisible();
+  await expect(second.getByRole('heading', { name: '文件正在其他分頁使用' })).toBeVisible();
   expect(mock.calls.analysis).toBe(1);
   await page.getByRole('button', { name: '停止並保留進度' }).click();
   mock.release();
@@ -124,6 +128,7 @@ test('two tabs cannot translate identical file concurrently; stop releases the l
   await loadHistory(second);
   await second.getByRole('button', { name: '確認翻譯', exact: true }).click();
   await expect(second.getByTestId('translation-status')).toHaveAttribute('data-stage', 'completed');
+  await second.locator('.export-menu > summary').click();
   await expect(second.getByRole('button', { name: '下載 MD', exact: true })).toBeEnabled();
 });
 

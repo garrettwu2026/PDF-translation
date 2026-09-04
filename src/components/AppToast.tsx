@@ -9,7 +9,7 @@ export type ToastMessage = {
 export default function AppToast({ toast, onClose }: { toast: ToastMessage | null; onClose: () => void }) {
   if (!toast) return null;
   return (
-    <div key={toast.id} className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 w-[calc(100%-2rem)] sm:w-auto max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 print:hidden ${
+    <div key={toast.id} role={toast.type === 'error' ? 'alert' : 'status'} className={`workspace-toast toast-${toast.type} fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-start gap-3 w-[calc(100%-2rem)] sm:w-auto max-w-sm animate-in slide-in-from-top-4 fade-in duration-300 print:hidden ${
       toast.type === 'success' ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-900/50 backdrop-blur-sm' : 'bg-red-950/80 text-red-400 border border-red-900/50 backdrop-blur-sm'
     }`}>
       {toast.type === 'success'

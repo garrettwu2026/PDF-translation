@@ -61,7 +61,9 @@ The product direction is **professional, friendly, and simple**. The interface s
 - `src/components/AccessibleDialog.tsx`: shared modal semantics, focus trap, Escape handling, and focus restoration
 - `src/components/DocumentUploadDropzone.tsx`: click, keyboard, and drag-and-drop document selection
 - `src/components/WorkspaceHeader.tsx`: application header and provider-key status
-- `src/components/TranslationActionPanel.tsx`: run controls, progress, status, and recoverable errors
+- `src/components/WorkspaceSettings.tsx`: upload-first settings and collapsible preferences
+- `src/components/WorkspaceProgress.tsx`: committed progress, stage, saved-state telemetry, and actionable errors
+- `src/components/WorkspaceRunBar.tsx`: fixed cost / budget / run controls
 - `src/components/DocumentResultPanel.tsx`: preview and export toolbar
 - `server.ts`: Express/Vite server and health endpoint
 - `server/epub.ts`: EPUB request validation, sanitization, and generation
@@ -184,3 +186,14 @@ The functional workflow remains unchanged.
 - sourceFingerprint 使用 SHA-256。Web Locks 防止同瀏覽器／同網站不同分頁同時翻譯相同來源，刪除亦受鎖保護；不支援 Web Locks 時停止付費流程，不採不安全的 localStorage 假鎖。不同裝置／瀏覽器不共用此鎖。
 - 保存章節累積上下文、前段譯文尾段與自訂指示。已完成部分的續傳設定必須一致；未完成 PDF 重新上傳相同原檔後，可重用已完成 OCR 結果。
 - 所有新瀏覽器回歸測試皆攔截供應商 HTTP 並使用假金鑰／合成文件。正式程式沒有測試後門。快取驗證規則改動時，需同步提升 durable-requests 的 workflow version。
+
+## 2026-09-04 全面 UI 加強（取代前述配色／版面）
+
+- 使用靛藍／薄荷綠與語意色彩變數，減少舊深色 utility 的強制覆寫；明確警告色、較深說明字、鍵盤 focus 與 reduced-motion 支援。已移除卡片懸浮位移。
+- 桌面上傳優先、左側設定／進度與右側閱讀室；固定底部已花費／剩餘預估／預算調整與執行控制。手機提供設定／進度／結果切換，修正 sticky selector 優先權，保留窄螢幕操作。
+- 模型單價、進階指示／分段與下載資訊按需展開；模型、文件類型、預算與既有功能均保留。執行時不允許更換文件或工作模式。
+- 進度使用已提交段數，不把目前進行中的段落當完成；保存階段最高 99%，成功完成才 100%。saveStatus／lastSavedAt 為 UI telemetry，只在實際 saveHistory 成功後顯示保存；不改 schema 或費用計算。
+- 預算／金鑰／儲存／供應商速率與一般錯誤分開提供下一步。調整預算不自動重送請求；儲存失敗明確提醒勿關閉頁面。
+- 閱讀室提供原文／譯文／段落對照、ATX／Setext 章節跳轉、字級／行距／三種紙張與專注閱讀（Escape 退出）。對照依空白行與順序並列，每頁 20 組；不是精確語意對齊，也不能用空欄判定漏譯。
+- PDF 始終使用完整 canonical `translation-result-content`，即使目前顯示原文／對照亦不混入它們；閱讀樣式置於祖先元素，不進入 PDF clone。Markdown／EPUB 仍以原本完整字串匯出。
+- UI 沒有新增付費 AI 請求、模型／價格更新、背景翻譯或跨裝置同步。舊 TranslationActionPanel 已由新元件取代，Git 歷史可還原。

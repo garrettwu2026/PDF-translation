@@ -35,5 +35,5 @@ test('核心工作台可切換、設定限制並讀取 Markdown', async ({ page 
     buffer: Buffer.from('# Browser smoke test\n\nThis document stays in the browser.'),
   });
   await expect(page.getByText('browser-smoke.md')).toBeVisible();
-  await expect(page.getByText('Browser smoke test')).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Browser smoke test', exact: true})).toBeVisible();
 });
