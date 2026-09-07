@@ -1,24 +1,27 @@
+import { formatChapterForReview, type ChapterRevision } from './chapter-revisions.ts';
 import type { DetectedDocumentType } from './document-types';
 
 export type ChapterProofreadingResult = {
-  correctedChapter: string;
+  revisions: ChapterRevision[];
   consistencyIssues: string[];
   newTerms: string[];
   newCharacters: string[];
 };
 
 export const CHAPTER_PROOFREADING_SCHEMA = {
-  name: 'chapter_consistency_proofreading',
+  name: 'chapter_consistency_patches_v2',
   schema: {
     type: 'object',
     additionalProperties: false,
     properties: {
-      correctedChapter: { type: 'string' },
+      revisions: { type: 'array', items: {type: 'object', additionalProperties: false,
+        properties: {id: {type: 'string'}, original: {type: 'string'}, replacement: {type: 'string'}},
+        required: ['id', 'original', 'replacement']} },
       consistencyIssues: { type: 'array', items: { type: 'string' } },
       newTerms: { type: 'array', items: { type: 'string' } },
       newCharacters: { type: 'array', items: { type: 'string' } },
     },
-    required: ['correctedChapter', 'consistencyIssues', 'newTerms', 'newCharacters'],
+    required: ['revisions', 'consistencyIssues', 'newTerms', 'newCharacters'],
   },
 } as const;
 
@@ -65,14 +68,14 @@ export function buildChapterProofreadingPrompt(input: {
   glossary: string;
   characterMap: string;
 }) {
-  return `請對下列一個章節或章節片段做一致性校稿。只修正跨段不一致、誤譯、漏譯、代名詞、術語、角色語氣及銜接問題；不得摘要、增添資訊或改變 Markdown 結構。所有 __PDFT_PROTECTED_XXXX__ 佔位符必須逐字保留。依 JSON Schema 回傳。\n\n【文件類型】\n${input.documentType}\n\n【風格指南】\n${input.style}\n\n【術語表】\n${input.glossary}\n\n【角色圖譜】\n${input.characterMap}\n\n【本章原文】\n${input.sourceChapter}\n\n【本章譯文】\n${input.translatedChapter}`;
+  return `請對下列一個章節或章節片段做一致性校稿。只修正跨段不一致、誤譯、漏譯、代名詞、術語、角色語氣及銜接問題；不得摘要、增添資訊或改變 Markdown 結構。所有 __PDFT_PROTECTED_XXXX__ 佔位符必須逐字保留。只回傳需要修改的句子 revisions；每筆包含句子 id、逐字相同的 original（不含 [[C00001]] 標記、前綴及前後空白） 與完整單句 replacement。不得刪除句子、合併句子、插入換行或修改 Markdown 前綴。沒有修改時回傳空 revisions。未列入修訂的句子由程式原樣保留。依 JSON Schema 回傳。\n\n【文件類型】\n${input.documentType}\n\n【風格指南】\n${input.style}\n\n【術語表】\n${input.glossary}\n\n【角色圖譜】\n${input.characterMap}\n\n【本章原文】\n${input.sourceChapter}\n\n【本章譯文】\n${formatChapterForReview(input.translatedChapter)}`;
 }
 
 export function parseChapterProofreadingResult(text: string): ChapterProofreadingResult {
   const normalized = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const parsed = JSON.parse(normalized) as Partial<ChapterProofreadingResult>;
   const arraysAreStrings = (value: unknown) => Array.isArray(value) && value.every((item) => typeof item === 'string');
-  if (typeof parsed.correctedChapter !== 'string' || !arraysAreStrings(parsed.consistencyIssues) || !arraysAreStrings(parsed.newTerms) || !arraysAreStrings(parsed.newCharacters)) {
+  if (!parsed || !Array.isArray(parsed.revisions) || !parsed.revisions.every(item => item && typeof item.id === 'string' && typeof item.original === 'string' && typeof item.replacement === 'string') || Object.keys(parsed).some(key => !['revisions','consistencyIssues','newTerms','newCharacters'].includes(key)) || !arraysAreStrings(parsed.consistencyIssues) || !arraysAreStrings(parsed.newTerms) || !arraysAreStrings(parsed.newCharacters)) {
     throw new Error('Chapter proofreading response does not match the required schema');
   }
   return parsed as ChapterProofreadingResult;

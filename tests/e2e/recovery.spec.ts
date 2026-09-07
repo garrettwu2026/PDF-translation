@@ -18,7 +18,7 @@ async function prepare(page: Page) {
   await expect(page.getByRole('button', { name: '確認翻譯', exact: true })).toBeEnabled();
 }
 
-async function mockProvider(context: BrowserContext, options: { expensiveDraft?: boolean; expensiveChapter?: boolean; holdCorrection?: boolean } = {}) {
+async function mockProvider(context: BrowserContext, options: { expensiveDraft?: boolean; expensiveChapter?: boolean; holdCorrection?: boolean; invalidChapter?: boolean } = {}) {
   const calls = { analysis: 0, draft: 0, correction: 0 };
   let chapterCalls = 0;
   let release!: () => void;
@@ -49,16 +49,16 @@ async function mockProvider(context: BrowserContext, options: { expensiveDraft?:
       if (options.holdCorrection && calls.correction === 1) await gate;
       value = { correctedTranslation: translated, newTerms: [], newCharacters: [], chunkSummary: '簡短句子',
         foundHallucinations: false, missingContentDetected: false, missingSentenceIds: [] };
-    } else if (schema === 'chapter_consistency_proofreading') {
+    } else if (schema === 'chapter_consistency_patches_v2') {
       chapterCalls++;
-      value = { correctedChapter: '這是一個簡短的句子。', consistencyIssues: [], newTerms: [], newCharacters: [] };
+      value = { revisions: options.invalidChapter ? [{id: 'C00001', original: '這是一個簡短的句子。', replacement: ''}] : [], consistencyIssues: [], newTerms: [], newCharacters: [] };
     } else {
       throw new Error('Unexpected mock stage: ' + schema);
     }
     await route.fulfill({ headers, contentType: 'application/json', body: JSON.stringify({
       id: 'synthetic', object: 'chat.completion', created: 1, model: body.model,
       choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(value) }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: options.expensiveChapter && schema === 'chapter_consistency_proofreading' ? 1_000_000 : 10,
+      usage: { prompt_tokens: options.expensiveChapter && schema === 'chapter_consistency_patches_v2' ? 1_000_000 : 10,
         completion_tokens: 10, total_tokens: 20 },
     }) }).catch(() => {}); // Reload may close the obsolete request.
   });
@@ -233,5 +233,31 @@ test('paid chapter review survives a budget stop without repeating correction or
   await page.getByRole('button', { name: '確認翻譯', exact: true }).click();
   await expect(page.getByTestId('translation-status')).toHaveAttribute('data-stage', 'completed');
   expect(mock.calls).toEqual({ analysis: 1, draft: 1, correction: 1 });
+  expect(mock.chapterCalls()).toBe(1);
+});
+
+test('invalid chapter deletion keeps committed translation and persists structured memory', async ({page, context}) => {
+  const mock = await mockProvider(context, {invalidChapter: true});
+  await prepare(page);
+  await page.getByRole('combobox', {name: '文件類型', exact: true}).selectOption('novel');
+  await page.getByRole('checkbox', {name: /章節一致性校稿/}).check();
+  await page.getByRole('button', {name: '確認翻譯', exact: true}).click();
+  await expect(page.getByTestId('translation-status')).toHaveAttribute('data-stage', 'completed');
+  const stored = await page.evaluate(() => new Promise<any>((resolve, reject) => {
+    const request = indexedDB.open('pdf-translator-db', 2);
+    request.onsuccess = () => {
+      const db = request.result;
+      const read = db.transaction('history').objectStore('history').getAll();
+      read.onsuccess = () => { db.close(); resolve(read.result[0]); };
+      read.onerror = () => reject(read.error);
+    };
+    request.onerror = () => reject(request.error);
+  }));
+  expect(stored.translatedText.trim()).toBe('這是一個簡短的句子。');
+  expect(JSON.parse(stored.plotSummary)).toMatchObject({version: 1, chapterSummaries: ['未命名章節：簡短句子']});
+  expect(stored.usageSnapshot.inputTokens).toBeGreaterThan(0);
+  await page.reload();
+  await loadHistory(page);
+  await expect(page.locator('#translation-result-content')).toContainText('這是一個簡短的句子。');
   expect(mock.chapterCalls()).toBe(1);
 });

@@ -15,10 +15,10 @@ test('chapter service restores protected content and reports usage before return
     ...input,
     generate: async request => {
       assert.equal(request.maxOutputTokens, 16384);
-      assert.equal(request.jsonSchema?.name, 'chapter_consistency_proofreading');
+      assert.equal(request.jsonSchema?.name, 'chapter_consistency_patches_v2');
       assert.ok(request.promptText?.includes('__PDFT_PROTECTED_0001__'));
       return { text: JSON.stringify({
-        correctedChapter: '# 設定\n\n執行 __PDFT_PROTECTED_0001__。',
+        revisions: [],
         consistencyIssues: [], newTerms: ['setup: 設定'], newCharacters: [],
       }), usageMetadata: { promptTokenCount: 10 } };
     },
@@ -34,7 +34,7 @@ test('invalid chapter edits retain incurred usage and reject instead of replacin
   await assert.rejects(reviewTranslatedChapter({
     ...input,
     generate: async () => ({ text: JSON.stringify({
-      correctedChapter: '# 設定\n\n執行測試。', consistencyIssues: [], newTerms: [], newCharacters: [],
+      revisions: [{id: 'C00002', original: '執行 __PDFT_PROTECTED_0001__。', replacement: '執行測試。'}], consistencyIssues: [], newTerms: [], newCharacters: [],
     }), usageMetadata: { promptTokenCount: 10 } }),
     onUsage: () => { billed++; },
   }), /completeness/);

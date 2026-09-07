@@ -207,3 +207,13 @@ The functional workflow remains unchanged.
 - 備份不含原始 PDF；未完成擷取需要原檔。另一裝置仍需自行設定金鑰。這是手動可攜備份，不是雲端同步；Web Lock 仍只保護同瀏覽器。
 - resume-cache-plan.ts 以原流程精確請求雜湊只讀試走下一段，第一筆缺失即停止，不帶金鑰、不發網路請求、不寫 DB。相同設定才扣抵已驗證階段，OCR／章節校稿保守不扣抵；與進行中已計費扣抵取較大值避免雙算。費用仍屬規劃估算，未確認用量需核對供應商帳單。
 - CI 對 PR／main push 執行 npm ci、npm run check（typecheck／unit／production build）、Chromium E2E；Playwright 啟動 NODE_ENV=production 的 npm start。開發者單獨執行 E2E 前須先 build。
+
+## 2026-09-07 文件記憶與章節修訂（項目 1、4）
+
+- plotSummary 欄位現在保存版本 1 的 JSON 字串，包含 globalSummary／chapterSummaries／recentSummaries／可選 currentChapter；沿用字串欄位，IndexedDB 與備份白名單無須升版。提示詞與成本預估先解析再格式化，不能把保存用 JSON 直接傳入模型。
+- 舊的標記文字仍可還原，修正缺少章節摘要時把近期進展混入全書摘要的問題。新格式的摘要內即使含標記字樣也不再被誤拆。舊程式不認得新格式，跨電腦續傳應先更新程式。
+- 逐段累積目前章節摘要，在下一個 ATX 章節標題／文件結尾完成彙整；不隨六段校稿窗口提前結束章節。保留 24 個章節、6 筆近期進展，目前章節最多 64 筆片段摘要，每筆 2000 字元，彙整提示約 4000 字元／章，屬有界記憶而非完整情節資料庫。既有未分章文字可從後續段落累積，不能重建舊存檔已丟棄的摘要。
+- 章節校稿 schema 改為 chapter_consistency_patches_v2，cacheScope 使用 chapter-patches:v2 隔離舊全文重寫回應；其他階段的請求快取不整批失效。
+- 校稿只回傳 revisions（id／original／replacement）與既有知識陣列，以原譯文精確字元位置套用；未修訂內容、空白與 Markdown 前綴保持不變。拒絕未知／重複 ID、不相符原句、空白替換、換行／標記注入、句子覆蓋數改變，以及每句保護內容移動或遺失。表格及獨立保護區塊不提供修訂 ID。
+- 校稿後繼續檢查全文品質與術語；失敗保留逐段譯文，費用仍保留。這保護句子覆蓋與結構，不能保證句內所有語意錯誤都由確定性規則偵測。
+- 新 schema 與記憶格式可能使舊版未提交階段的精確快取不命中；已提交譯文與歷史費用維持，後續請求仍受預算限制。

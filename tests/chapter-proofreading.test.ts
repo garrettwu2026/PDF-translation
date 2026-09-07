@@ -36,6 +36,6 @@ test('chapter review only runs at a boundary when risk signals justify the extra
 });
 
 test('parses strict chapter proofreading output', () => {
-  const result = parseChapterProofreadingResult('{"correctedChapter":"譯文","consistencyIssues":[],"newTerms":[],"newCharacters":[]}');
-  assert.equal(result.correctedChapter, '譯文');
+  const result = parseChapterProofreadingResult('{"revisions":[],"consistencyIssues":[],"newTerms":[],"newCharacters":[]}');
+  assert.deepEqual(result.revisions, []);
 });

@@ -20,7 +20,7 @@ import { DEFAULT_TRANSLATION_BUDGET_USD, DEFAULT_TRANSLATION_RETRY_LIMIT, Transl
 import { type ToastMessage } from '../components/AppToast';
 import { useBudgetedAiProviders } from './useBudgetedAiProviders';
 import { costProfile, forecastDocumentCost, normalizeCostSamples, type CostSample } from '../lib/cost-forecast';
-import { createLayeredDocumentMemory, formatLayeredDocumentMemory, getNewKnowledgeLines, mergeKnowledgeLines, updateLayeredDocumentMemory } from '../lib/document-memory';
+import { createLayeredDocumentMemory, serializeLayeredDocumentMemory, formatLayeredDocumentMemory, getNewKnowledgeLines, mergeKnowledgeLines, updateLayeredDocumentMemory } from '../lib/document-memory';
 import { getDocumentTypeInstruction, normalizeDetectedDocumentType, normalizeDocumentType, resolveDocumentType, type DetectedDocumentType, type DocumentTypeId } from '../lib/document-types';
 import { useTranslationMachine } from './useTranslationMachine';
 import { translateChunkWithQuality } from '../lib/translation-runner';
@@ -691,6 +691,7 @@ export function useTranslationWorkspace() {
       let dynamicGlossary = glossaryText;
       let dynamicCharacterMap = detectedCharacters;
       let layeredMemory = createLayeredDocumentMemory(globalSummary, startChunk > 0 ? plotSummary : '');
+      latestPlotSummary = serializeLayeredDocumentMemory(layeredMemory);
       const effectiveDocumentType = resolveDocumentType(documentType, detectedDocumentType);
       latestEffectiveDocumentType = effectiveDocumentType;
       setResolvedDocumentType(effectiveDocumentType);
@@ -762,9 +763,10 @@ export function useTranslationWorkspace() {
           setCharacterMap(dynamicCharacterMap);
           latestCharacterMap = dynamicCharacterMap;
         }
-        if (result.chunkSummary) {
-          layeredMemory = updateLayeredDocumentMemory(layeredMemory, result.chunkSummary, textChunks[i]);
-          latestPlotSummary = formatLayeredDocumentMemory(layeredMemory);
+        {
+          const chapterEnds = i === translationChunksCount - 1 || /^#{1,3}\s+/m.test(textChunks[i + 1]);
+          layeredMemory = updateLayeredDocumentMemory(layeredMemory, result.chunkSummary, textChunks[i], chapterEnds);
+          latestPlotSummary = serializeLayeredDocumentMemory(layeredMemory);
           setPlotSummary(latestPlotSummary);
         }
         if (effectiveDocumentType === 'novel') {
@@ -814,7 +816,7 @@ export function useTranslationWorkspace() {
           const translatedChapter = chapterTranslatedChunks.join('\n\n');
           try {
             const review = await reviewTranslatedChapter({
-              model: selectedModel, sourceChapter, translatedChapter,
+              model: selectedModel, sourceChapter, translatedChapter, signal: translationController.signal,
               documentType: effectiveDocumentType, style: detectedStyle, glossary: dynamicGlossary,
               characterMap: [
                 dynamicCharacterMap,

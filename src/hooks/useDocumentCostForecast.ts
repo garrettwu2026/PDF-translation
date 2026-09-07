@@ -1,3 +1,4 @@
+import { createLayeredDocumentMemory, formatLayeredDocumentMemory } from '../lib/document-memory';
 import { useMemo } from 'react';
 import { estimateTextTokens, splitMarkdownIntoTokenChunks } from '../lib/text';
 import { sampleDocumentForAnalysis } from '../lib/document-analysis';
@@ -25,8 +26,9 @@ export function useDocumentCostForecast({ extractionComplete, extractedText, spl
   const estimatedSourceChunks = tokenCount ? (splitTranslation ? Math.ceil(tokenCount / 1800) : 1) : 0;
   const remainingSourceTokens = sourceChunkTokens.length
     ? sourceChunkTokens.slice(completedCostChunks).reduce((sum, tokens) => sum + tokens, 0) : tokenCount;
+  const formattedMemory = useMemo(() => formatLayeredDocumentMemory(createLayeredDocumentMemory('', plotSummary)), [plotSummary]);
   const memoryTokens = useMemo(() => estimateTextTokens([
-    translationStyle, glossary, characterMap, plotSummary, customInstructions,
+    translationStyle, glossary, characterMap, formattedMemory, customInstructions,
     formatNovelContinuity(novelContinuity),
   ].filter(Boolean).join('\n')), [translationStyle, glossary, characterMap, plotSummary, customInstructions, novelContinuity]);
   const forecastDocumentType = resolveDocumentType(documentType, resolvedDocumentType ?? 'general');
@@ -34,7 +36,7 @@ export function useDocumentCostForecast({ extractionComplete, extractedText, spl
     ? estimateTextTokens(sampleDocumentForAnalysis(extractedText)) : undefined, [extractionComplete, extractedText]);
   const promptOverheads = useMemo(() => estimatePromptOverheads({
     style: translationStyle || '一般/通用', glossary: glossary || '無', characterMap: characterMap || '無',
-    plotSummary: [plotSummary, formatNovelContinuity(novelContinuity)].filter(Boolean).join('\n'),
+    plotSummary: [formattedMemory, formatNovelContinuity(novelContinuity)].filter(Boolean).join('\n'),
     customInstructions, documentType: forecastDocumentType,
   }), [translationStyle, glossary, characterMap, plotSummary, novelContinuity, customInstructions, forecastDocumentType]);
   const forecastOptions = {
