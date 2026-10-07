@@ -1,3 +1,4 @@
+import { assessPdfPage } from './pdf-page-quality.ts';
 import { abortableDelay, isAbortError, throwIfAborted } from './abort.ts';
 import { TranslationBudgetExceededError } from './translation-budget.ts';
 import { buildExtractionPrompt, extractionSystemInstruction } from './translation-prompts.ts';
@@ -8,6 +9,7 @@ import { HistoryStorageError } from './db.ts';
 
 export type ExtractionWorker = Pick<Worker, 'addEventListener' | 'removeEventListener' | 'postMessage'>;
 type Options = {
+  forceOcrPages?: number[];
   worker: ExtractionWorker; fileBuffer: ArrayBuffer; requestId: string;
   model: string; retryLimit: number; signal: AbortSignal; isCancelled: () => boolean;
   generate: (options: GenerateContentOptions) => Promise<ContentResult>;
@@ -57,11 +59,11 @@ export function extractTranslationPdf(options: Options): Promise<string> {
           results.length = total;
           options.onTotal(total);
         } else if (type === 'EXTRACTION_CHUNK') {
-          const { index, base64, rawText } = payload as { index: number; base64?: string; rawText: string };
+          const { index, base64, rawText, needsOcr } = payload as { index: number; base64?: string; rawText: string; needsOcr?: boolean };
           if (processing || index !== completed || index >= total) throw new Error('PDF 頁面順序或覆蓋不完整。');
           processing = true;
           if (options.isCancelled()) throw new Error('PDF 處理已取消');
-          const hasRawText = rawText.replace(/\s+/g, '').length > 10;
+          const hasRawText = !(needsOcr ?? assessPdfPage(rawText).needsOcr);
           let success = hasRawText;
           if (hasRawText) results[index] = rawText;
           if (!hasRawText && !base64) throw new Error('掃描頁缺少 OCR 資料。');
@@ -116,7 +118,7 @@ export function extractTranslationPdf(options: Options): Promise<string> {
       throwIfAborted(signal);
       signal.addEventListener('abort', onAbort, { once: true });
       worker.addEventListener('message', handleMessage);
-      worker.postMessage({ type: 'GET_EXTRACTION_CHUNKS', payload: { requestId, fileBuffer: options.fileBuffer } }, [options.fileBuffer]);
+      worker.postMessage({ type: 'GET_EXTRACTION_CHUNKS', payload: { requestId, fileBuffer: options.fileBuffer, forceOcrPages: options.forceOcrPages } }, [options.fileBuffer]);
     } catch (error) {
       fail(error);
     }

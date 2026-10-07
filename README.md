@@ -4,7 +4,8 @@ A Traditional Chinese document translation web app for PDF and Markdown files. I
 
 ## Highlights
 
-- Browser-side PDF text extraction with OCR fallback for scanned pages
+- Browser-side PDF extraction with garbled/mixed-page checks, local page preview, and selectable page OCR
+- Persisted sentence-ID source/translation comparison with source focus and revision warnings
 - Translation pipeline with glossary, character, style, and continuity analysis
 - Token-aware Markdown chunking with layered whole-book, chapter, and recent context
 - Structured model outputs plus deterministic checks for omissions and damaged Markdown

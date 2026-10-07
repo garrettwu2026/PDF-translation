@@ -1,3 +1,5 @@
+import AlignedComparison from './AlignedComparison';
+import type { TranslationAlignment } from '../lib/translation-alignment';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { BookOpen, ChevronDown, Copy, Download, Loader2, Maximize2, Minimize2 } from 'lucide-react';
 import type { TranslationStage } from '../lib/translation-state-machine';
@@ -7,6 +9,7 @@ import { useThrottledPreview } from '../hooks/useThrottledPreview';
 const MarkdownPreview = lazy(() => import('./MarkdownPreview'));
 
 type Props = {
+  alignment?: TranslationAlignment[];
   activeTab: 'translate' | 'converter'; translatedText: string; extractedText: string;
   isTranslating: boolean; isExtracting: boolean; isCopying: boolean; isDownloadingEpub: boolean; isDownloadingPdf: boolean;
   statusMessage: string; translationStage: TranslationStage;
@@ -82,7 +85,7 @@ export default function DocumentResultPanel(p: Props) {
         </div>
       </header>
       <div className="reader-controls print:hidden">
-        {p.activeTab === 'translate' && <div className="reader-views" aria-label="預覽內容">{([['translation','譯文'],['source','原文'],['compare','段落對照']] as const).map(([id,label]) => <button key={id} aria-pressed={view === id} onClick={() => setView(id)}>{label}</button>)}</div>}
+        {p.activeTab === 'translate' && <div className="reader-views" aria-label="預覽內容">{([['translation','譯文'],['source','原文'],['compare','原文對照']] as const).map(([id,label]) => <button key={id} aria-pressed={view === id} onClick={() => setView(id)}>{label}</button>)}</div>}
         <details className="reading-settings"><summary>閱讀設定</summary><div className="reading-settings-fields">
           <label>字級<select aria-label="閱讀字級" value={fontSize} onChange={e => setFontSize(Number(e.target.value))}><option value={15}>小 · 15</option><option value={17}>標準 · 17</option><option value={20}>大 · 20</option><option value={24}>特大 · 24</option></select></label>
           <label>行距<select aria-label="閱讀行距" value={lineHeight} onChange={e => setLineHeight(Number(e.target.value))}><option value={1.6}>緊湊</option><option value={1.9}>舒適</option><option value={2.2}>寬鬆</option></select></label>
@@ -93,8 +96,9 @@ export default function DocumentResultPanel(p: Props) {
       {!comparing && pages.length > 1 && <nav className="preview-pagination print:hidden" aria-label="閱讀分頁"><button disabled={shownPage === 0} onClick={() => setReadingPage(shownPage - 1)}>上一頁</button><label>閱讀頁 <select aria-label="閱讀頁碼" value={shownPage} onChange={e => setReadingPage(Number(e.target.value))}>{pages.map((_, i) => <option key={i} value={i}>{i + 1}／{pages.length}</option>)}</select></label><button disabled={shownPage === pages.length - 1} onClick={() => setReadingPage(shownPage + 1)}>下一頁</button><span>匯出仍包含完整文件</span></nav>}
       <div className={`reader-scroll paper-${paper}`} style={{ '--reader-font': `${fontSize}px`, '--reader-leading': lineHeight } as CSSProperties}>
         {sourcePreview && !comparing && <p className="preview-notice print:hidden">原文預覽 · 匯出仍使用已完成的譯文</p>}
-        {comparing && <div className="comparison-view print:hidden">
-          <p className="preview-notice">按空白行分段、依順序並列，非精確逐句對齊。譯文可能合併或拆段；空欄不代表漏譯。</p>
+        {comparing && Boolean(p.alignment?.length) && <AlignedComparison key={p.extractedText.slice(0, 100)} rows={p.alignment!} source={p.extractedText} translation={p.translatedText} />}
+        {comparing && !p.alignment?.length && <div className="comparison-view print:hidden">
+          <p className="preview-notice">此文件尚無句子對應資料。按空白行分段、依順序並列，非精確逐句對齊。譯文可能合併或拆段；空欄不代表漏譯。</p>
           <div className="compare-pagination"><span>原文 {sourceRows.length} 段 · 譯文 {translatedRows.length} 段</span><div><button disabled={currentPage === 0} onClick={() => setComparePage(currentPage - 1)}>上一頁</button><span>{currentPage + 1}／{pageCount}</span><button disabled={currentPage + 1 >= pageCount} onClick={() => setComparePage(currentPage + 1)}>下一頁</button></div></div>
           {Array.from({ length: Math.min(20, Math.max(sourceRows.length, translatedRows.length) - currentPage * 20) }, (_, offset) => {
             const i = currentPage * 20 + offset;

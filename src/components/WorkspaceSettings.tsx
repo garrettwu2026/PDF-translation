@@ -1,4 +1,5 @@
 import type { TranslationWorkspace } from '../hooks/useTranslationWorkspace';
+import PdfPageInspector from './PdfPageInspector';
 import DocumentUploadDropzone from './DocumentUploadDropzone';
 import EpubMetadataSettings from './EpubMetadataSettings';
 import ModelSelectionPanel from './ModelSelectionPanel';
@@ -16,6 +17,7 @@ export default function WorkspaceSettings({ w }: { w: TranslationWorkspace }) {
         {w.extractedText && <span>已讀取 {w.extractedText.length.toLocaleString()} 字元</span>}
       </div>}
       {!w.file && w.customTitle && <p className="muted">{w.customTitle}</p>}
+      {w.activeTab === 'translate' && w.file?.name.toLowerCase().endsWith('.pdf') && <PdfPageInspector file={w.file} selected={w.forceOcrPages} onChange={w.setForceOcrPages} disabled={busy || w.extractionComplete || Boolean(w.currentFileId)} />}
       <p className="muted mt-3">文件保存在此瀏覽器；AI 翻譯使用你提供的金鑰。</p>
     </section>
     {w.activeTab === 'translate' && <ModelSelectionPanel selectedModel={w.selectedModel} selectedModelData={w.selectedModelData} disabled={busy} budgetUsd={w.translationBudgetUsd} spentUsd={w.actualCost.totalUsd} retryLimit={w.translationRetryLimit} estimatedUsd={w.costForecast.remainingUsd} onModelChange={w.setSelectedModel} onBudgetChange={w.setTranslationBudgetUsd} onRetryLimitChange={w.setTranslationRetryLimit} />}

@@ -3,6 +3,8 @@ import type { TranslationUsageSnapshot } from './translation-budget.ts';
 import type { CostSample } from './cost-forecast.ts';
 
 export interface HistoryRecord {
+  alignment?: import('./translation-alignment.ts').TranslationAlignment[];
+  forceOcrPages?: number[];
   sourceFingerprint?: string;
   resumeSettings?: string;
   customInstructions?: string;
@@ -86,6 +88,7 @@ export const estimateHistoryRecordCharacters = (record: HistoryRecord) =>
   + (record.costSamples ? JSON.stringify(record.costSamples).length : 0)
   + (record.chapterContext ? JSON.stringify(record.chapterContext).length : 0)
   + (record.customInstructions?.length ?? 0)
+  + (record.alignment ? JSON.stringify(record.alignment).length : 0)
   + (record.requestCharacters ?? 0);
 
 export const selectHistoryRecordsToKeep = (

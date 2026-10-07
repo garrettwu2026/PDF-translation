@@ -4,6 +4,7 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { uint8ArrayToBase64 } from './lib/text';
 import { assertPdfPageLimit } from './lib/file-limits';
 import { reportWarning } from './lib/diagnostics';
+import { assessPdfPage, inspectPdfPage } from './lib/pdf-page-quality';
 import { cleanPdfPages, orderPdfPageText, type PdfTextItemLike } from './lib/pdf-layout';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -17,6 +18,7 @@ type WorkerRequest = {
     requestId: string;
     fileBuffer?: ArrayBuffer;
     index?: number;
+    forceOcrPages?: number[];
   };
 };
 
@@ -110,13 +112,16 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         const startPage = index * chunkSize;
         const endPage = Math.min(startPage + chunkSize, pageCount) - 1;
         const pageTexts: string[] = [];
+        let quality = assessPdfPage('');
 
         try {
           for (let pageNumber = startPage + 1; pageNumber <= endPage + 1; pageNumber++) {
             if (cancelledTasks.has(requestId)) return;
             const page = await pdfjsDoc.getPage(pageNumber);
             const textContent = await page.getTextContent();
-            pageTexts.push(orderPdfPageText(textContent.items as PdfTextItemLike[]));
+            const raw = orderPdfPageText(textContent.items as PdfTextItemLike[]);
+            pageTexts.push(raw);
+            quality = await inspectPdfPage(page, [pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintInlineImageXObject, pdfjsLib.OPS.paintImageMaskXObject], raw);
             page.cleanup();
           }
         } catch {
@@ -125,7 +130,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
         const chunkRawText = cleanPdfPages(pageTexts);
         let chunkBase64: string | undefined;
-        if (chunkRawText.replace(/\s+/g, '').length <= 10) {
+        const needsOcr = quality.needsOcr || Boolean(payload.forceOcrPages?.includes(index + 1));
+        if (needsOcr) {
           const pageIndices = Array.from(
             { length: endPage - startPage + 1 },
             (_, offset) => startPage + offset,
@@ -145,7 +151,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
             requestId,
             index,
             base64: chunkBase64,
-            rawText: chunkRawText,
+            rawText: chunkRawText, needsOcr, quality,
             isLast: index === totalChunks - 1,
           },
         });

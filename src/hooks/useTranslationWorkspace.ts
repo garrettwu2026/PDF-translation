@@ -1,3 +1,4 @@
+import { sourceChunkLocations, rebaseAlignment, type TranslationAlignment } from '../lib/translation-alignment';
 import { useDocumentConverter } from './useDocumentConverter';
 import { useResumeInsights } from './useResumeInsights';
 import { useSourceTokenEstimate } from './useSourceTokenEstimate';
@@ -41,6 +42,8 @@ export function useTranslationWorkspace() {
   const [customTitle, setCustomTitle] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
   const [extractedText, setExtractedText] = useState('');
+  const [alignment, setAlignment] = useState<TranslationAlignment[]>([]);
+  const [forceOcrPages, setForceOcrPages] = useState<number[]>([]);
   const [extractionComplete, setExtractionComplete] = useState(true);
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
   const [splitTranslation, setSplitTranslation] = useState(true);
@@ -119,6 +122,8 @@ export function useTranslationWorkspace() {
     setCustomTitle(record.title);
     setAuthorName(record.author || '');
     setCoverImage(record.coverImage);
+    setAlignment(record.alignment ?? []);
+    setForceOcrPages(record.forceOcrPages ?? []);
     setExtractedText(record.extractedText);
     setExtractionComplete(record.extractionComplete !== false);
     setSplitTranslation(record.splitTranslation !== false);
@@ -188,6 +193,8 @@ export function useTranslationWorkspace() {
     if (currentFileId === historyToDelete) {
       setCurrentFileId(null);
       setExtractedText('');
+      setAlignment([]);
+      setForceOcrPages([]);
       setTranslatedText('');
       setCurrentChunk(0);
       setCompletedCostChunks(0);
@@ -330,6 +337,8 @@ export function useTranslationWorkspace() {
     const uploadSequence = ++uploadSequenceRef.current;
     setTranslatedText('');
     setExtractedText('');
+    setAlignment([]);
+    setForceOcrPages([]);
     setTokenCount(null);
     setCompletedCostChunks(0);
     setCostSamples([]);
@@ -402,6 +411,10 @@ export function useTranslationWorkspace() {
       return;
     }
 
+    if (forceOcrPages.length && !extractionComplete && activeModel.provider !== 'google') {
+      setError('指定頁面 OCR 需要 Google Gemini，請先選擇 Gemini 模型。');
+      return;
+    }
     const hasProviderKey = activeModel.provider === 'google'
       ? Boolean(manualApiKey && isManualKeyActive)
       : Boolean(manualOpenaiApiKey && isOpenaiKeyActive);
@@ -456,6 +469,7 @@ export function useTranslationWorkspace() {
     if (startingChunk === 0) {
       setCurrentChunk(0);
       setTranslatedText('');
+      setAlignment([]);
       setTranslationStyle(null);
       setGlossary('無');
       setCharacterMap('');
@@ -470,6 +484,7 @@ export function useTranslationWorkspace() {
     setEstimatedRemainingTime(null);
     const fileId = startsNewDocumentRun ? crypto.randomUUID() : currentFileId || crypto.randomUUID();
     journalDocumentRef.current = fileId;
+    let latestAlignment = startingChunk > 0 ? alignment.slice() : [];
     let latestChapterContext = startsNewDocumentRun ? undefined : chapterContextRef.current;
     let latestCostSamples = startsNewDocumentRun ? [] : normalizeCostSamples(costSamples);
     let latestExtractedText = extractedText;
@@ -511,6 +526,7 @@ export function useTranslationWorkspace() {
         const record: HistoryRecord = {
           sourceFingerprint: fingerprint, resumeSettings, customInstructions,
           chapterContext: latestChapterContext,
+          alignment: latestAlignment, forceOcrPages,
           id: fileId,
           title: customTitle || file?.name || 'Untitled',
           author: authorName,
@@ -585,7 +601,7 @@ export function useTranslationWorkspace() {
         try {
           fullMarkdown = await extractTranslationPdf({
             worker: pdfWorkerRef.current, fileBuffer: arrayBuffer, requestId: extractionRequestId,
-            model: selectedModel, retryLimit: translationRetryLimit,
+            model: selectedModel, retryLimit: translationRetryLimit, forceOcrPages,
             signal: translationController.signal, isCancelled: () => translationCancelledRef.current,
             generate: generateContentWrapper,
             onUsage: usage => recordUsage(usage, selectedModel, translationBudgetUsd, 'extraction'),
@@ -712,6 +728,7 @@ export function useTranslationWorkspace() {
       let chapterNewCharacterCount = latestChapterContext?.characters ?? 0;
       let chapterQualityWarningCount = latestChapterContext?.warnings ?? 0;
 
+      const sourceLocations = sourceChunkLocations(fullMarkdown, textChunks);
       for (let i = startChunk; i < translationChunksCount; i++) {
         throwIfAborted(translationController.signal);
         chunkMemoryCheckpoint = {
@@ -790,6 +807,11 @@ export function useTranslationWorkspace() {
         }
         dynamicPlotSummary = formatWorkingMemory();
 
+        let pendingAlignment = result.alignment.map(row => ({...row,
+          sourceStart: sourceLocations[i][row.sourceStart], sourceEnd: sourceLocations[i][row.sourceEnd],
+          translatedStart: row.translatedStart + fullTranslatedText.length, translatedEnd: row.translatedEnd + fullTranslatedText.length,
+        }));
+        let chapterAlignmentRebased = false;
         fullTranslatedText += currentChunkTranslated + '\n\n';
         if (chapterProofreading) {
           chapterSourceChunks.push(textChunks[i]);
@@ -825,7 +847,10 @@ export function useTranslationWorkspace() {
               generate: generateContentWrapper,
               onUsage: usage => recordUsage(usage, selectedModel, translationBudgetUsd, 'chapter_review'),
             });
+            const beforeReview = fullTranslatedText;
             fullTranslatedText = `${fullTranslatedText.slice(0, chapterStartOffset)}${review.correctedChapter}\n\n`;
+            pendingAlignment = rebaseAlignment([...latestAlignment, ...pendingAlignment], beforeReview, fullTranslatedText);
+            chapterAlignmentRebased = true;
             currentChunkTranslated = review.correctedChapter.slice(-Math.max(1000, currentChunkTranslated.length));
             dynamicGlossary = mergeKnowledgeLines(dynamicGlossary, review.newTerms);
             dynamicCharacterMap = mergeKnowledgeLines(dynamicCharacterMap, review.newCharacters);
@@ -861,6 +886,9 @@ export function useTranslationWorkspace() {
           chapterQualityWarningCount = 0;
         }
 
+        latestAlignment = chapterAlignmentRebased
+          ? pendingAlignment : [...latestAlignment, ...pendingAlignment];
+        setAlignment(latestAlignment);
         latestTranslatedText = fullTranslatedText;
         latestProgress = commitTranslationChunk(latestProgress, i);
         const chunkEndUsage = getUsageSnapshot();
@@ -972,6 +1000,7 @@ export function useTranslationWorkspace() {
         const record: HistoryRecord = {
           sourceFingerprint: fingerprint, resumeSettings, customInstructions,
           chapterContext: latestChapterContext,
+          alignment: latestAlignment, forceOcrPages,
           id: fileId,
           title: customTitle || file?.name || 'Untitled',
           author: authorName,
@@ -1056,7 +1085,7 @@ export function useTranslationWorkspace() {
   const resumeInsights = useResumeInsights(currentFileId, isTranslating, completedCostChunks, lastSavedAt,
     {selectedModel, splitTranslation, documentType, customInstructions, chapterProofreading}, translationRetryLimit);
 
-  const { sourceChunkTokens, estimatedSourceChunks, forecastOptions, costForecast } = useDocumentCostForecast({
+  const { sourceChunkTokens, estimatedSourceChunks, forecastOptions, costForecast } = useDocumentCostForecast({ forceOcrPages,
     cachedStages: resumeInsights.plan.stages,
     extractionComplete,
     extractedText,
@@ -1089,6 +1118,7 @@ export function useTranslationWorkspace() {
     reasoningTokens: actualReasoningTokens,
   };
   return {
+    alignment, forceOcrPages, setForceOcrPages, extractionComplete,
     activeTab, setActiveTab, customTitle, setCustomTitle,
     customInstructions, setCustomInstructions, isExtracting, extractedText,
     selectedModel, setSelectedModel, splitTranslation, setSplitTranslation,

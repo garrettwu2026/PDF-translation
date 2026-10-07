@@ -6,6 +6,8 @@ type Shape = 'string' | 'number' | 'boolean' | { [key: string]: Shape } | [Shape
 const usage: Shape = {inputTokens: 'number', cachedInputTokens: 'number', cacheWriteInputTokens: 'number', outputTokens: 'number', reasoningTokens: 'number', inputUsd: 'number', outputUsd: 'number',
   breakdown: [{stage: 'string', model: 'string', inputTokens: 'number', outputTokens: 'number', reasoningTokens: 'number', inputUsd: 'number', outputUsd: 'number'}]};
 const recordShape: Shape = {
+  forceOcrPages: ['number'],
+  alignment: [{id: 'string', sourceStart: 'number', sourceEnd: 'number', translatedStart: 'number', translatedEnd: 'number', stale: 'boolean'}],
   id: 'string', title: 'string', author: 'string', coverImage: 'string', extractedText: 'string', translatedText: 'string',
   currentChunk: 'number', totalChunks: 'number', status: 'string', timestamp: 'number', model: 'string',
   sourceFingerprint: 'string', resumeSettings: 'string', customInstructions: 'string', extractionComplete: 'boolean', splitTranslation: 'boolean',
@@ -17,20 +19,20 @@ const recordShape: Shape = {
 };
 const requestShape: Shape = {id: 'string', documentId: 'string', state: 'string', response: {text: 'string', finishReason: 'string'}};
 
-function select(value: unknown, shape: Shape): any {
+function select(value: unknown, shape: Shape, maxItems = 10_000): any {
   if (value === undefined || value === null) return undefined;
   if (typeof shape === 'string') {
     if (typeof value !== shape || (shape === 'number' && (!Number.isFinite(value) || Number(value) < 0))) throw new Error('備份欄位型別或數值不正確。');
     return value;
   }
   if (Array.isArray(shape)) {
-    if (!Array.isArray(value) || value.length > 10_000) throw new Error('備份陣列格式或大小不正確。');
+    if (!Array.isArray(value) || value.length > maxItems) throw new Error('備份陣列格式或大小不正確。');
     return value.map(item => { if (item == null) throw new Error('備份陣列含無效項目。'); return select(item, shape[0]); });
   }
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('備份物件格式不正確。');
   const result: Record<string, unknown> = {};
   for (const [key, rule] of Object.entries(shape)) {
-    const selected = select((value as Record<string, unknown>)[key], rule);
+    const selected = select((value as Record<string, unknown>)[key], rule, key === 'alignment' ? 250_000 : 10_000);
     if (selected !== undefined) result[key] = selected;
   }
   return result;
@@ -45,6 +47,17 @@ export function sanitizeProject(value: unknown): ProjectData {
     || typeof record.translatedText !== 'string' || !record.model || !Number.isFinite(record.timestamp)
     || !Number.isInteger(record.currentChunk) || !Number.isInteger(record.totalChunks) || record.currentChunk > record.totalChunks
     || !['translating', 'completed', 'error'].includes(record.status)) throw new Error('備份缺少必要文件或進度資訊。');
+  if (record.forceOcrPages && (record.forceOcrPages.length > 3600 || record.forceOcrPages.some(n => !Number.isInteger(n) || n < 1 || n > 3600))) throw new Error('OCR 頁碼不正確。');
+  if (record.alignment) {
+    const ids = new Set<string>();
+    for (const row of record.alignment) {
+      if (!row.id || !/^C\d+-S\d{4}$/.test(row.id) || ids.has(row.id)
+        || ![row.sourceStart, row.sourceEnd, row.translatedStart, row.translatedEnd].every(Number.isInteger)
+        || row.sourceStart > row.sourceEnd || row.sourceEnd > record.extractedText.length
+        || row.translatedStart > row.translatedEnd || row.translatedEnd > record.translatedText.length) throw new Error('句子對應資料不正確。');
+      ids.add(row.id);
+    }
+  }
   record.coverImage ??= null;
   if (record.coverImage && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(record.coverImage)) throw new Error('備份封面格式不支援。');
   if (record.sourceFingerprint && !/^[a-f0-9]{64}$/.test(record.sourceFingerprint)) throw new Error('來源指紋格式錯誤。');

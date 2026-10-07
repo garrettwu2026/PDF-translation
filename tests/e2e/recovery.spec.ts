@@ -196,7 +196,10 @@ test('mixed PDF sends only scanned page to OCR, retries truncation and persists 
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   pdf.addPage().drawText('Native readable source page.', { x: 40, y: 700, font, size: 16 });
-  pdf.addPage().drawRectangle({ x: 40, y: 600, width: 200, height: 60, color: rgb(0, 0, 0) });
+  const scanned = pdf.addPage();
+  scanned.drawText('Annual report text header 2026', {x: 40, y: 780, font, size: 12});
+  const image = await pdf.embedPng(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=', 'base64'));
+  scanned.drawImage(image, {x: 40, y: 100, width: 500, height: 600});
   await page.goto('/');
   await page.getByTestId('api-key-button').click();
   await page.getByLabel('Google Gemini API Key：').fill('AIzaSyntheticNeverSentToProvider');
@@ -204,6 +207,13 @@ test('mixed PDF sends only scanned page to OCR, retries truncation and persists 
   await page.getByTestId('file-input').setInputFiles({
     name: 'mixed.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await pdf.save()),
   });
+  await page.getByText('PDF 逐頁文字檢查', {exact:true}).click();
+  await expect(page.locator('.pdf-page-text')).toContainText('Native readable source page.');
+  await page.getByRole('checkbox', {name:'指定此頁使用 OCR'}).check();
+  await expect(page.getByText('指定 OCR：第 1 頁')).toBeVisible();
+  await page.getByRole('checkbox', {name:'指定此頁使用 OCR'}).uncheck();
+  await page.getByLabel('檢查 PDF 頁碼').fill('2');
+  await expect(page.getByText(/可能含圖片正文，將使用 OCR/)).toBeVisible();
   await page.getByRole('button', { name: '確認翻譯', exact: true }).click();
   await expect.poll(() => analysisCalls).toBe(1);
   expect(ocrCalls).toBe(2);
@@ -260,4 +270,60 @@ test('invalid chapter deletion keeps committed translation and persists structur
   await loadHistory(page);
   await expect(page.locator('#translation-result-content')).toContainText('這是一個簡短的句子。');
   expect(mock.chapterCalls()).toBe(1);
+});
+
+test('validated sentence alignment locates source and survives history reload', async ({page, context}) => {
+  const mock = await mockProvider(context);
+  await prepare(page);
+  await page.getByRole('button', {name:'確認翻譯',exact:true}).click();
+  await expect(page.getByTestId('translation-status')).toHaveAttribute('data-stage','completed');
+  await page.getByRole('button',{name:'原文對照',exact:true}).click();
+  await expect(page.locator('.comparison-row')).toHaveCount(1);
+  await page.getByRole('button',{name:'定位原文 C1-S0001',exact:true}).click();
+  await expect(page.locator('#source-C1-S0001')).toBeFocused();
+  await expect(page.locator('#source-C1-S0001')).toContainText(source);
+  await page.reload(); await loadHistory(page);
+  await page.getByRole('button',{name:'原文對照',exact:true}).click();
+  await expect(page.getByRole('button',{name:'定位原文 C1-S0001'})).toContainText('這是一個簡短的句子。');
+  expect(mock.calls).toEqual({analysis:1,draft:1,correction:1});
+});
+
+test('explicit OCR selection sends an otherwise native page and persists the choice', async ({page, context}) => {
+  let ocrCalls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  await context.route('https://generativelanguage.googleapis.com/**', async route => {
+    if (route.request().method() === 'OPTIONS') {await route.fulfill({status:204,headers:{'access-control-allow-origin':'*'}});return;}
+    const body = route.request().postDataJSON();
+    const inline = body.contents?.[0]?.parts?.find((part: any) => part.inlineData)?.inlineData;
+    let text: string;
+    if (inline) {ocrCalls++;text = 'Native readable source page.';}
+    else {await gate; text = JSON.stringify({glossary:'無',characterMap:'無',styleGuide:'一般',globalSummary:'',documentType:'general'});}
+    await route.fulfill({contentType:'application/json',body:JSON.stringify({candidates:[{content:{role:'model',parts:[{text}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:10,candidatesTokenCount:10}})}).catch(() => {});
+  });
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  pdf.addPage().drawText('Native readable source page.', {x:40,y:700,font,size:16});
+  await page.goto('/');
+  await page.getByTestId('api-key-button').click();
+  await page.getByLabel('Google Gemini API Key：').fill('AIzaSyntheticNeverSentToProvider');
+  await page.getByRole('button',{name:'儲存並套用'}).click();
+  await page.getByTestId('file-input').setInputFiles({name:'forced.pdf',mimeType:'application/pdf',buffer:Buffer.from(await pdf.save())});
+  await page.getByText('PDF 逐頁文字檢查',{exact:true}).click();
+  await expect(page.locator('.pdf-page-text')).toContainText('Native readable source page.');
+  await page.getByRole('checkbox',{name:'指定此頁使用 OCR'}).check();
+  await page.getByRole('button',{name:'確認翻譯',exact:true}).click();
+  await expect.poll(() => ocrCalls).toBe(1);
+  await page.getByRole('button',{name:'停止並保留進度'}).click();release();
+  await expect(page.getByTestId('translation-status')).toHaveAttribute('data-stage','paused');
+  await page.reload();
+  await page.getByTestId('history-button').click();
+  await page.getByRole('button',{name:'載入 forced.pdf',exact:true}).click();
+  const stored = await page.evaluate(() => new Promise<any>(resolve => {
+    const request = indexedDB.open('pdf-translator-db',2);request.onsuccess = () => {
+      const db = request.result;const get = db.transaction('history').objectStore('history').getAll();get.onsuccess = () => {db.close();resolve(get.result[0]);};
+    };
+  }));
+  expect(stored.forceOcrPages).toEqual([1]);
+  expect(stored.extractedText).toContain('Native readable source page.');
 });
