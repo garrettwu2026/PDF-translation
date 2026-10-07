@@ -242,3 +242,8 @@ progress::-webkit-progress-value { background: var(--primary); border-radius: 8p
 .preview-pagination button, .preview-pagination select { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: white; }
 .preview-pagination span { color: var(--muted); font-size: .75rem; }
 .reader-scroll pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.pdf-page-text { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.aligned-translation { display: block; width: 100%; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; color: inherit; line-height: inherit; background: transparent; border: 1px solid transparent; border-radius: 6px; }
+.aligned-translation:hover, .alignment-selected { background: var(--surface-soft, #eef7f5); }
+.aligned-translation:focus-visible { outline: 2px solid #4f46e5; }

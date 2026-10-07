@@ -1,3 +1,4 @@
+import { inspectPdfPage } from './pdf-page-quality';
 import { assertPdfPageLimit } from './file-limits';
 import { cleanPdfPages, orderPdfPageText, type PdfTextItemLike } from './pdf-layout';
 import { throwIfAborted } from './abort';
@@ -5,7 +6,7 @@ import { estimateTextTokens } from './text';
 
 export const extractPdfText = async (
   file: File,
-  onProgress: (page: number, total: number, text: string, pageText: string) => void,
+  onProgress: (page: number, total: number, text: string, pageText: string, needsOcr?: boolean) => void,
   signal?: AbortSignal,
   incrementalText = true,
 ) => {
@@ -31,10 +32,11 @@ export const extractPdfText = async (
       const textContent = await page.getTextContent();
       throwIfAborted(signal);
       const pageText = orderPdfPageText(textContent.items as PdfTextItemLike[]);
+      const quality = await inspectPdfPage(page, [pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintInlineImageXObject, pdfjsLib.OPS.paintImageMaskXObject], pageText);
       pageTexts.push(pageText);
       page.cleanup();
       const fullText = incrementalText ? cleanPdfPages(pageTexts) : '';
-      onProgress(pageNumber, pdf.numPages, fullText, pageText);
+      onProgress(pageNumber, pdf.numPages, fullText, pageText, quality.needsOcr);
     }
     return cleanPdfPages(pageTexts);
   } finally {
@@ -48,9 +50,9 @@ export const extractPdfText = async (
  */
 export async function estimatePdfSourceTokens(file: File, onPages: (total: number) => void, signal?: AbortSignal) {
   let hasSparsePage = false;
-  const text = await extractPdfText(file, (_page, total, _text, pageText) => {
+  const text = await extractPdfText(file, (_page, total, _text, pageText, needsOcr) => {
     onPages(total);
-    if (pageText.replace(/\s/g, '').length < 20) hasSparsePage = true;
+    if (needsOcr || pageText.replace(/\s/g, '').length < 20) hasSparsePage = true;
   }, signal, false);
   return hasSparsePage || !text.trim() ? null : estimateTextTokens(text);
 }

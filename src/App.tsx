@@ -52,7 +52,7 @@ export default function App() {
             {w.activeTab === 'translate' && (w.file || w.extractedText) && <div className="app-card cost-card"><TranslationCostSummary resumeInsights={w.resumeInsights} isCalculating={w.isCalculating} documentTokens={w.tokenCount} forecast={w.costForecast} costBreakdown={w.costBreakdown} actualUsage={w.actualUsage} actualCost={w.actualCost} /></div>}
           </div>
         </aside>
-        <DocumentResultPanel activeTab={w.activeTab} translatedText={w.translatedText} extractedText={w.extractedText} isTranslating={w.isTranslating} isExtracting={w.isExtracting} isCopying={w.isCopying} isDownloadingEpub={w.isDownloadingEpub} isDownloadingPdf={w.isDownloadingPdf} statusMessage={w.statusMessage} translationStage={w.translationStage} onCopy={w.handleCopyText} onDownloadEpub={() => w.downloadEpub()} onDownloadMarkdown={w.handleDownloadMarkdown} onDownloadPdf={w.downloadPdf} focusMode={focusMode} onFocusMode={setFocusMode} />
+        <DocumentResultPanel alignment={w.alignment} activeTab={w.activeTab} translatedText={w.translatedText} extractedText={w.extractedText} isTranslating={w.isTranslating} isExtracting={w.isExtracting} isCopying={w.isCopying} isDownloadingEpub={w.isDownloadingEpub} isDownloadingPdf={w.isDownloadingPdf} statusMessage={w.statusMessage} translationStage={w.translationStage} onCopy={w.handleCopyText} onDownloadEpub={() => w.downloadEpub()} onDownloadMarkdown={w.handleDownloadMarkdown} onDownloadPdf={w.downloadPdf} focusMode={focusMode} onFocusMode={setFocusMode} />
       </div>
     </main>
     <WorkspaceRunBar w={w} onBudget={() => go('budget')} onProgress={() => go('progress')} />

@@ -143,3 +143,12 @@ test('explicitly empty scanned pages keep coverage without translating the senti
   await run.worker.emit('EXTRACTION_CHUNK', { index: 1, rawText: 'Readable native source text' });
   assert.equal(await run.job, 'Readable native source text');
 });
+
+test('mixed or explicitly selected pages use OCR despite a readable native header', async () => {
+  let called = false;
+  const run = setup(async options => { called = true; assert.equal(options.base64Pdf, 'mixed-page'); return {text:'Complete OCR body',finishReason:'STOP'}; });
+  await run.worker.emit('TOTAL_CHUNKS', {totalChunks:1});
+  await run.worker.emit('EXTRACTION_CHUNK', {index:0,rawText:'Readable header above ten characters',base64:'mixed-page',needsOcr:true});
+  assert.equal(await run.job, 'Complete OCR body');
+  assert.equal(called,true);
+});

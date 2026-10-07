@@ -37,7 +37,7 @@ test('reader settings, chapter links, comparison pagination and canonical PDF ex
   await page.getByLabel('閱讀行距').selectOption('2.2');
   await page.getByLabel('閱讀紙張').selectOption('mint');
   await expect(page.locator('#translation-result-content')).toHaveCSS('font-size', '24px');
-  await page.getByRole('button', {name: '段落對照', exact: true}).click();
+  await page.getByRole('button', {name: '原文對照', exact: true}).click();
   await expect(page.locator('.comparison-row')).toHaveCount(20);
   await page.getByRole('button', {name: '下一頁', exact: true}).click();
   await expect(page.locator('.comparison-row')).toHaveCount(8);
@@ -68,7 +68,7 @@ test('reader settings, chapter links, comparison pagination and canonical PDF ex
     exportedMarkdown = route.request().postDataJSON().markdown;
     await route.fulfill({contentType: 'application/epub+zip', body: 'synthetic export'});
   });
-  await page.getByRole('button', {name: '段落對照', exact: true}).click();
+  await page.getByRole('button', {name: '原文對照', exact: true}).click();
   await page.locator('.export-menu > summary').click();
   await page.getByRole('button', {name: '下載 EPUB', exact: true}).click();
   await expect.poll(() => exportedMarkdown).toBe(translation);
@@ -87,7 +87,7 @@ test('mobile workspace, budget shortcut and export menu remain usable without ov
   await page.getByLabel('翻譯費用上限').fill('10');
   await expect(page.locator('.budget-shortcut')).toContainText('$10.00');
   await page.getByRole('button', {name: '結果', exact: true}).click();
-  await page.getByRole('button', {name: '段落對照', exact: true}).click();
+  await page.getByRole('button', {name: '原文對照', exact: true}).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (await page.getByRole('button', {name: '關閉通知'}).isVisible()) await page.getByRole('button', {name: '關閉通知'}).click();
   await page.screenshot({path: 'test-results/ui-mobile.png', fullPage: false});

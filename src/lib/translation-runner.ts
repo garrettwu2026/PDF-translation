@@ -1,3 +1,4 @@
+import { buildAlignment, type TranslationAlignment } from './translation-alignment.ts';
 import { abortableDelay, isAbortError, throwIfAborted } from './abort.ts';
 import type { ContentResult, GenerateContentOptions, GenerateStreamOptions } from './ai-providers.ts';
 import { protectContent, restoreProtectedContent, formatProtectedContentInstruction } from './protected-content.ts';
@@ -41,6 +42,7 @@ import { IncompleteOutputError } from './request-integrity.ts';
 import { HistoryStorageError } from './db.ts';
 
 export type ChunkTranslationResult = {
+  alignment: TranslationAlignment[];
   translatedText: string;
   newTerms: string[];
   newCharacters: string[];
@@ -229,6 +231,7 @@ export async function translateChunkWithQuality(options: ChunkTranslationOptions
       if (finalQuality.blocking) throw new TranslationQualityError('Translation failed deterministic completeness checks');
       options.onPreview(restored.text);
       return {
+        alignment: buildAlignment(annotatedSource.text, corrected, annotatedSource.segments, protectedSource.entries, options.chunkNumber),
         translatedText: restored.text,
         newTerms: correction.newTerms,
         newCharacters: correction.newCharacters,
